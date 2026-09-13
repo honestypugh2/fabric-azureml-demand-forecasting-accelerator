@@ -1,0 +1,28 @@
+# Two-checkpoint profile.
+#
+# Mirrors a finance close cadence where operational data is captured at two
+# mid-month checkpoints rather than a dense snapshot schedule: an early read
+# around day 15 and a confirming read around day 21. Use this profile when the
+# source system only produces a couple of intra-month extracts per accounting
+# month.
+#
+# Structure: facility_id x accounting_month x snapshot_date, target is the
+# month-end actual and is constant within a facility-month.
+
+environment: checkpoint
+
+data:
+  n_facilities: 6
+  n_months: 30
+  snapshot_days: [15, 21]
+  demo_cutoff_day: 15
+
+split:
+  n_test_months: 4
+  n_val_months: 4
+  n_backtest_folds: 3
+
+automl:
+  experiment_name: revenue-automl-checkpoint
+  timeout_minutes: 20
+  max_trials: 10

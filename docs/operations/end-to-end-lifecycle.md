@@ -125,7 +125,50 @@ on the *same* time-aware split and the *same* primary metric before promoting.
 
 ---
 
-## 3. MLflow: where the evidence lives
+## 3. Mid-month rows: keep, restrict, or pool?
+
+Mid-month rows carry predictors but no observed target until close, so the
+target is the month-end actual repeated across the month's snapshots. That is
+required by the contract, not leakage — the same answer to differently-timed
+questions. The open question is whether pooling every snapshot day helps.
+
+Measure it rather than assuming, holding the evaluation rows fixed:
+
+```bash
+uv run python scripts/compare_midmonth_handling.py --env checkpoint --cutoff-day 15
+```
+
+Three strategies, all scored on the same checkpoint rows:
+
+| Strategy | Trains on |
+| --- | --- |
+| `all_snapshots` | Every snapshot row, including days later than the checkpoint |
+| `upto_cutoff` | Rows at or before the checkpoint (matches production availability) |
+| `cutoff_only` | Only the checkpoint day, one row per facility-month |
+
+On the two-checkpoint profile (days 15 and 21), restricting the training rows
+beat pooling them at both checkpoints:
+
+| Cutoff | Strategy | Train rows | WAPE | vs pooled |
+| --- | --- | --- | --- | --- |
+| Day 15 | `cutoff_only` | 132 | **0.0287** | **16.4% better** |
+| Day 15 | `all_snapshots` | 264 | 0.0343 | — |
+| Day 21 | `cutoff_only` | 132 | **0.0374** | **40.6% better** |
+| Day 21 | `all_snapshots` | 264 | 0.0629 | — |
+
+**Fewer, more relevant rows won.** A day-21 row describes a month that is
+two-thirds complete; a day-15 row describes one that is half complete. Pooling
+them asks a single model to learn both regimes, and it does neither as well.
+Note also the bias flip at day 21 (`-0.0046` restricted versus `+0.0084`
+pooled) — pooling did not just add error, it changed the direction of the
+error.
+
+The practical read: **train one model per checkpoint.** It is the same
+reasoning behind stratifying by facility — don't pool populations that behave
+differently. Re-run the comparison on your own data before committing, since
+the margin depends on how much the regimes actually differ.
+
+## 4. MLflow: where the evidence lives
 
 MLflow is the system of record for the inner loop. Nothing is promoted on the
 strength of a terminal screenshot.
@@ -166,9 +209,9 @@ signature and dependencies — that is what makes the endpoint reproducible.
 
 ---
 
-## 4. Running the model on new data
+## 5. Running the model on new data
 
-### 4.1 Locally (fastest inner-loop check)
+### 5.1 Locally (fastest inner-loop check)
 
 Generate genuinely unseen months, then score them:
 
@@ -184,7 +227,22 @@ uv run revenue-prediction predict \
 This produced **144 predictions** across 6 facilities for `2025-07`, `2025-08`,
 `2025-09` — months the model never saw.
 
-### 4.2 In Azure ML (the production path)
+> **`snapshot_date` is required at inference even though the target is not.**
+> It is not a measured value; it is the as-of stamp for when the extract was
+> frozen. The model never consumes the date directly, but `days_elapsed`,
+> `business_days_elapsed`, and `remaining_days` derive from it and are
+> `nullable=False`, and they are the denominator behind every run-rate feature.
+> If figures freeze on the 15th but arrive on the 18th, the snapshot date is
+> the **15th** — using the delivery date makes the month look slower than it is
+> and the model under-forecasts the close.
+
+Validate an inference file with the target absent:
+
+```bash
+uv run revenue-prediction validate-data <file>.parquet --no-require-target
+```
+
+### 5.2 In Azure ML (the production path)
 
 ```python
 from azure.ai.ml import Input
@@ -202,7 +260,7 @@ scheduled, checkpoint-driven process — there is no per-request latency
 requirement. Batch scales to zero between checkpoints; an online endpoint bills
 continuously. Deploy online only if a genuine interactive consumer appears.
 
-### 4.3 What a prediction row carries
+### 5.3 What a prediction row carries
 
 Every row is self-describing, which is what makes the outer loop auditable:
 
@@ -221,9 +279,9 @@ Every row is self-describing, which is what makes the outer loop auditable:
 
 ---
 
-## 5. Outer loop: after the model is live
+## 6. Outer loop: after the model is live
 
-### 5.1 The metric that actually matters
+### 6.1 The metric that actually matters
 
 Inner-loop metrics come from a **held-out split**. Outer-loop metrics come from
 **reality**, and they are the only ones that justify continued use.
@@ -239,7 +297,7 @@ is inherently retrospective:
 
 The `continuous_evaluation` component exists for exactly this join.
 
-### 5.2 What to watch
+### 6.2 What to watch
 
 | Signal | What it means | Typical response |
 | --- | --- | --- |
@@ -253,7 +311,7 @@ The `continuous_evaluation` component exists for exactly this join.
 **Data drift is a leading indicator; realized accuracy is the verdict.** Drift
 alone is not a reason to retrain. Drift plus degraded realized WAPE is.
 
-### 5.3 When to retrain
+### 6.3 When to retrain
 
 Retrain when any of these are true:
 
@@ -271,7 +329,7 @@ otherwise — it does not inherit trust.
 
 ---
 
-## 6. What changes inside a managed VNet
+## 7. What changes inside a managed VNet
 
 The **workflow is identical**; the **network path is not**. Nothing about the
 metrics, gates, or loops changes. What changes is reachability.
@@ -312,7 +370,7 @@ Full sequence: [`infra/terraform/README.md`](../../infra/terraform/README.md).
 
 ---
 
-## 7. Where observability happens
+## 8. Where observability happens
 
 Observability is split across four places. Knowing which one answers which
 question saves real time during an incident.
@@ -326,7 +384,7 @@ question saves real time during an incident.
 | Is inference degrading over time? | **Model monitoring** + realized-accuracy join |
 | Platform-level failures, alerting | **Azure Monitor / Log Analytics** via App Insights |
 
-### 7.1 Two things that are easy to get wrong
+### 8.1 Two things that are easy to get wrong
 
 **Components must be registered explicitly.** A pipeline that references a
 component by file path (`component: ./train_code_first.yml`) creates an
@@ -351,7 +409,7 @@ Realized accuracy does **not** depend on the monitoring feature. Joining stored
 predictions to closed-month actuals via `revenue_continuous_evaluation` gives
 the outer-loop verdict with no extra identity requirements.
 
-### 7.2 Monitoring compute clusters and instances
+### 8.2 Monitoring compute clusters and instances
 
 ```python
 cluster = client.compute.get("cpu-cluster")
@@ -377,7 +435,39 @@ actually network reachability problems.
 
 ---
 
-## 8. Quick reference
+## 9. Onboarding a real extract
+
+Source systems rarely emit the contract's column names, identifier format, or
+date format. Map an extract onto the contract without changing anything
+upstream:
+
+```bash
+uv run python scripts/adapt_snapshot_extract.py \
+  --input extract.csv \
+  --facility-col facility_id \
+  --snapshot-col snapshot_date \
+  --target-col financial_net_revenue \
+  --mapping column_map.yaml \
+  --out data/adapted/revenue_snapshots.parquet
+```
+
+The adapter normalizes facility codes to `FAC-NNN` (writing the mapping out so
+it stays reproducible), converts dates, derives the calendar columns from
+`snapshot_date`, and derives `prior_month`, `prior_year`, and rolling target
+features from **strictly prior closed months**.
+
+Two behaviours worth knowing:
+
+- **Unavailable measures are filled with `NaN`, not a value.** The contract
+  requires the columns to exist, but a constant fill would look like data. Those
+  columns impute to a single constant at training time and carry no signal, so
+  exclude them from the model rather than pretending they are observations.
+- **Every run screens for target leakage.** A feature that is constant within a
+  facility-month *and* correlates above 0.99 with the target is a month-end
+  value copied backwards. That is the failure mode that produces excellent
+  validation metrics and a model that collapses in production.
+
+## 10. Quick reference
 
 ```bash
 # Inner loop (local)

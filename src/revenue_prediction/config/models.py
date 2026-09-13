@@ -216,7 +216,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    environment: str = Field(default="dev", pattern="^(dev|test|prod)$")
+    environment: str = Field(default="dev", pattern="^[a-z][a-z0-9_-]{0,31}$")
     data: DataConfig = Field(default_factory=DataConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
     split: SplitConfig = Field(default_factory=SplitConfig)

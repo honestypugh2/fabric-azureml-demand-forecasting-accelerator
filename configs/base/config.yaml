@@ -44,7 +44,9 @@ evaluation:
 
 automl:
   task: regression
-  primary_metric: normalized_root_mean_squared_error
+  # Ranks models identically to WAPE on a fixed evaluation set: both share the
+  # sum|y-yhat| numerator and differ only by a constant denominator.
+  primary_metric: normalized_mean_absolute_error
   experiment_name: revenue-automl
   timeout_minutes: 30
   max_trials: 20

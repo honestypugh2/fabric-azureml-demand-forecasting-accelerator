@@ -72,7 +72,7 @@ class GroupMetrics(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    environment: str = Field(default="dev", pattern="^(dev|test|prod)$")
+    environment: str = Field(default="dev", pattern="^[a-z][a-z0-9_-]{0,31}$")
 
 
 class TrainResponse(BaseModel):
