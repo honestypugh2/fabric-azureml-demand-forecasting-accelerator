@@ -114,7 +114,9 @@ def add_historical_features(frame: pd.DataFrame) -> list[str]:
             history = values[:i]  # strictly prior closed months
             key = (facility, month)
             derived["prior_month_net_revenue"][key] = history[-1] if i >= 1 else np.nan
-            derived["prior_year_same_month_net_revenue"][key] = values[i - 12] if i >= 12 else np.nan
+            derived["prior_year_same_month_net_revenue"][key] = (
+                values[i - 12] if i >= 12 else np.nan
+            )
             for window, name in [
                 (3, "rolling_3_month_net_revenue"),
                 (6, "rolling_6_month_net_revenue"),
@@ -157,7 +159,9 @@ def screen_for_leakage(frame: pd.DataFrame) -> pd.DataFrame:
         {
             "feature": candidates,
             "constant_within_month": [bool(constant[c]) for c in candidates],
-            "corr_with_target": [float(corr[c]) if pd.notna(corr[c]) else float("nan") for c in candidates],
+            "corr_with_target": [
+                float(corr[c]) if pd.notna(corr[c]) else float("nan") for c in candidates
+            ],
         }
     )
     report["suspect"] = report["constant_within_month"] & (report["corr_with_target"].abs() > 0.99)
@@ -176,9 +180,7 @@ def main() -> None:
     args = parser.parse_args()
 
     frame = (
-        pd.read_parquet(args.input)
-        if args.input.suffix == ".parquet"
-        else pd.read_csv(args.input)
+        pd.read_parquet(args.input) if args.input.suffix == ".parquet" else pd.read_csv(args.input)
     )
     print(f"input rows    : {len(frame)}")
     print(f"input columns : {len(frame.columns)}")

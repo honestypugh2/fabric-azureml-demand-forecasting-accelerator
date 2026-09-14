@@ -39,7 +39,9 @@ def main() -> None:
     parser.add_argument("--env", default="dev")
     parser.add_argument("--data", default=None, help="Defaults to the configured synthetic parquet")
     parser.add_argument("--cutoff-day", type=int, default=None)
-    parser.add_argument("--model", default=None, help="Defaults to the configured primary candidate")
+    parser.add_argument(
+        "--model", default=None, help="Defaults to the configured primary candidate"
+    )
     args = parser.parse_args()
 
     settings = load_settings(args.env)
