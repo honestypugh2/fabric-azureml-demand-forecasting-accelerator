@@ -1,5 +1,5 @@
 [project]
-name = "revenue-prediction-accelerator"
+name = "fabric-azureml-demand-forecasting-accelerator"
 version = "0.1.0"
 description = "Reusable Azure Machine Learning accelerator for predicting healthcare facility net revenue from partial-month data."
 readme = "README.md"
