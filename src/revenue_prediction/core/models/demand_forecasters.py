@@ -1,0 +1,479 @@
+"""Discoverable univariate time-series forecasters, separate from regression."""
+
+from __future__ import annotations
+
+import warnings
+from dataclasses import dataclass
+from typing import Annotated, Literal, Protocol
+
+import numpy as np
+import pandas as pd
+from numpy.typing import NDArray
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from revenue_prediction.core.data.contracts import ContractViolation
+from revenue_prediction.core.data.demand_forecast import (
+    FORECAST_COLUMNS,
+    FORECAST_SCHEMA_VERSION,
+    DemandForecastRequest,
+    DemandFrequency,
+    demand_period_offset,
+    validate_demand_forecasts,
+)
+from revenue_prediction.core.data.demand_schema import DEMAND_SERIES_COLUMNS, DEMAND_TARGET
+from revenue_prediction.core.features.demand import DemandFeatureConfig, available_demand_history
+from revenue_prediction.core.models.demand_baselines import forecast_demand_baselines
+
+
+class TimeSeriesModelConfig(BaseModel):
+    """Fixed, predeclared smoothing parameters; no holdout-based tuning."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    alpha: float = Field(default=0.2, gt=0, le=1)
+    beta: float = Field(default=0.1, gt=0, le=1)
+    damping: float = Field(default=0.9, gt=0, le=1)
+    average_periods: int = Field(default=3, ge=1, strict=True)
+    average_seasons: int = Field(default=2, ge=1, strict=True)
+    ets_trend: Literal["add"] | None = "add"
+    ets_seasonal: Literal["add"] | None = "add"
+    ets_damped: bool = True
+    arima_order: tuple[
+        Annotated[int, Field(strict=True, ge=0, le=5)],
+        Annotated[int, Field(strict=True, ge=0, le=5)],
+        Annotated[int, Field(strict=True, ge=0, le=5)],
+    ] = (1, 1, 0)
+    sarima_order: tuple[
+        Annotated[int, Field(strict=True, ge=0, le=5)],
+        Annotated[int, Field(strict=True, ge=0, le=5)],
+        Annotated[int, Field(strict=True, ge=0, le=5)],
+    ] = (1, 0, 0)
+    statistical_maxiter: int = Field(default=200, ge=1, le=2000, strict=True)
+
+    @model_validator(mode="after")
+    def _statistical_parameters(self) -> TimeSeriesModelConfig:
+        if self.ets_damped and self.ets_trend is None:
+            raise ValueError("Damped ETS requires an additive trend.")
+        for order in (self.arima_order, self.sarima_order):
+            if any(type(value) is not int or value < 0 or value > 5 for value in order):
+                raise ValueError("ARIMA orders must contain three integers between 0 and 5.")
+        return self
+
+
+@dataclass(frozen=True)
+class ForecasterCapability:
+    """Truthful executable capabilities and history requirements."""
+
+    model_id: str
+    family: Literal["baseline", "statistical"]
+    description: str
+    minimum_periods: int
+    requires_contiguous_history: bool
+    frequencies: tuple[DemandFrequency, ...] = ("MS", "W-MON")
+    provider: str = "original_numpy"
+    version: str = "1"
+    license: str = "MIT"
+    required_extras: tuple[str, ...] = ()
+    supported_covariates: tuple[str, ...] = ()
+    supports_probabilistic_output: bool = False
+    supports_hierarchical_reconciliation: bool = False
+    local_execution: bool = True
+    azure_execution_validated: bool = False
+
+
+_CAPABILITIES = (
+    ForecasterCapability("naive", "baseline", "Repeat the last available observation.", 1, False),
+    ForecasterCapability("seasonal_naive", "baseline", "Repeat a prior calendar season.", 1, False),
+    ForecasterCapability(
+        "moving_average", "baseline", "Repeat a trailing calendar-window mean.", 1, True
+    ),
+    ForecasterCapability(
+        "seasonal_moving_average",
+        "baseline",
+        "Average matching positions in trailing seasons.",
+        1,
+        True,
+    ),
+    ForecasterCapability(
+        "drift", "baseline", "Extrapolate the first-to-last average change.", 2, True
+    ),
+    ForecasterCapability(
+        "ses", "statistical", "Simple exponential smoothing: level, no trend or season.", 2, True
+    ),
+    ForecasterCapability(
+        "holt_damped", "statistical", "Additive damped level/trend smoothing, no season.", 3, True
+    ),
+    ForecasterCapability(
+        "croston", "statistical", "Smooth nonzero sizes and arrival intervals.", 2, True
+    ),
+    ForecasterCapability(
+        "sba", "statistical", "Bias-corrected Croston intermittent forecast.", 2, True
+    ),
+    ForecasterCapability(
+        "tsb", "statistical", "Smooth occurrence probability and positive size.", 2, True
+    ),
+    ForecasterCapability(
+        "ets",
+        "statistical",
+        "Optimized additive Holt-Winters level/trend/seasonality.",
+        4,
+        True,
+        provider="statsmodels",
+        license="BSD-3-Clause",
+        required_extras=("forecasting",),
+    ),
+    ForecasterCapability(
+        "arima",
+        "statistical",
+        "Nonseasonal integrated autoregressive moving average.",
+        8,
+        True,
+        provider="statsmodels",
+        license="BSD-3-Clause",
+        required_extras=("forecasting",),
+    ),
+    ForecasterCapability(
+        "sarima",
+        "statistical",
+        "Seasonal integrated autoregressive moving average.",
+        8,
+        True,
+        provider="statsmodels",
+        license="BSD-3-Clause",
+        required_extras=("forecasting",),
+    ),
+)
+
+# Preserve the original offline comparison and avoid implicit optional dependencies.
+DEFAULT_DEMAND_MODELS = (
+    "naive",
+    "seasonal_naive",
+    "moving_average",
+    "seasonal_moving_average",
+    "drift",
+    "ses",
+    "holt_damped",
+)
+
+
+def demand_model_capabilities() -> tuple[ForecasterCapability, ...]:
+    """Return immutable metadata for implemented models, not a research wish list."""
+    return _CAPABILITIES
+
+
+def demand_model_capability(model_id: str) -> ForecasterCapability:
+    """Resolve an implemented model or raise an actionable configuration error."""
+    for capability in _CAPABILITIES:
+        if capability.model_id == model_id:
+            return capability
+    raise ValueError(
+        f"Unknown demand forecaster {model_id!r}; inspect demand-models for supported IDs."
+    )
+
+
+class Forecaster(Protocol):
+    """Minimal fitted time-series interface; unsupported capabilities stay explicit."""
+
+    capability: ForecasterCapability
+
+    def fit(self, history: pd.DataFrame, frequency: DemandFrequency, seasonal_periods: int) -> None:
+        """Fit one origin-available series, never a randomly split tabular target."""
+        ...
+
+    def predict(self, dates: pd.DatetimeIndex) -> NDArray[np.float64]:
+        """Forecast complete future dates without observing future targets."""
+        ...
+
+
+class _LocalForecaster:
+    def __init__(self, capability: ForecasterCapability, config: TimeSeriesModelConfig) -> None:
+        self.capability = capability
+        self.config = config
+        self._history: pd.DataFrame | None = None
+
+    def fit(self, history: pd.DataFrame, frequency: DemandFrequency, seasonal_periods: int) -> None:
+        self._history = None
+        validate_demand_model_history(
+            self.capability.model_id, history, frequency, seasonal_periods, self.config
+        )
+        values = history[DEMAND_TARGET].to_numpy(dtype=float)
+        self._history = history.copy(deep=True)
+        self._frequency = frequency
+        self._season = seasonal_periods
+        self._values = values.copy()
+        self._level = float(values[0])
+        self._trend = float(values[1] - values[0]) if len(values) > 1 else 0.0
+        self._fit_states(values)
+
+    def _fit_states(self, values: NDArray[np.float64]) -> None:
+        if self.capability.model_id in {"ses", "holt_damped"}:
+            for value in values[1:]:
+                previous = self._level
+                projected = previous
+                if self.capability.model_id == "holt_damped":
+                    projected += self.config.damping * self._trend
+                self._level = self.config.alpha * value + (1 - self.config.alpha) * projected
+                if self.capability.model_id == "holt_damped":
+                    self._trend = self.config.beta * (self._level - previous) + (
+                        (1 - self.config.beta) * self.config.damping * self._trend
+                    )
+        if self.capability.model_id in {"croston", "sba", "tsb"}:
+            positives = np.flatnonzero(values > 0)
+            if len(positives) == 0:
+                self._intermittent_prediction = 0.0
+            else:
+                first = int(positives[0])
+                size = float(values[first])
+                interval = float(first + 1)
+                probability = 1.0 / interval
+                elapsed = 1
+                for value in values[first + 1 :]:
+                    occurs = value > 0
+                    probability += self.config.beta * (float(occurs) - probability)
+                    if occurs:
+                        size += self.config.alpha * (value - size)
+                        interval += self.config.alpha * (elapsed - interval)
+                        elapsed = 1
+                    else:
+                        elapsed += 1
+                self._intermittent_prediction = (
+                    probability * size
+                    if self.capability.model_id == "tsb"
+                    else size
+                    / interval
+                    * (1 - self.config.alpha / 2 if self.capability.model_id == "sba" else 1)
+                )
+
+    def _calendar_leads(self, dates: pd.DatetimeIndex) -> NDArray[np.intp]:
+        if self._history is None:
+            raise RuntimeError("Fit the forecaster on origin-available history before predicting.")
+        if len(dates) == 0:
+            raise ValueError("Supply at least one future forecast date.")
+        last_date = self._history["date"].iloc[-1]
+        calendar = pd.date_range(start=last_date, end=dates[-1], freq=self._frequency)
+        leads = calendar.get_indexer(dates)
+        if np.any(leads <= 0) or not dates.equals(
+            pd.date_range(start=dates[0], periods=len(dates), freq=self._frequency)
+        ):
+            raise ValueError(
+                "Forecast dates must be unique, aligned, chronological and after training."
+            )
+        return leads
+
+    def predict(self, dates: pd.DatetimeIndex) -> NDArray[np.float64]:
+        leads = self._calendar_leads(dates)
+        model_id = self.capability.model_id
+        if model_id in {"croston", "sba", "tsb"}:
+            prediction = np.full(len(dates), self._intermittent_prediction)
+        elif model_id == "naive":
+            prediction = np.full(len(dates), self._values[-1])
+        elif model_id == "seasonal_naive":
+            sources = [
+                target
+                - ((index // self._season) + 1)
+                * self._season
+                * demand_period_offset(self._frequency)
+                for index, target in enumerate(dates)
+            ]
+            if self._history is None:
+                raise RuntimeError("Fit before forecasting seasonal sources.")
+            values = self._history.set_index("date")[DEMAND_TARGET].reindex(sources)
+            if np.any(values.isna().to_numpy()):
+                raise ContractViolation(
+                    "seasonal_naive lacks available calendar sources; supply seasonal history."
+                )
+            prediction = values.to_numpy(dtype=float)
+        elif model_id == "moving_average":
+            prediction = np.full(len(dates), np.mean(self._values[-self.config.average_periods :]))
+        elif model_id == "seasonal_moving_average":
+            tail = self._values[-self._season * self.config.average_seasons :]
+            cycle = tail.reshape(self.config.average_seasons, self._season).mean(axis=0)
+            prediction = cycle[(leads - 1) % self._season]
+        elif model_id == "drift":
+            slope = (self._values[-1] - self._values[0]) / (len(self._values) - 1)
+            prediction = self._values[-1] + leads * slope
+        elif model_id == "ses":
+            prediction = np.full(len(dates), self._level)
+        elif model_id == "holt_damped":
+            phi = self.config.damping
+            damped_leads = leads if phi == 1 else phi * (1 - phi**leads) / (1 - phi)
+            prediction = self._level + damped_leads * self._trend
+        else:
+            raise ValueError(f"No prediction implementation registered for {model_id!r}.")
+        if not np.isfinite(prediction).all():
+            raise ContractViolation(
+                "Forecaster produced nonfinite predictions; check history magnitude/parameters."
+            )
+        return np.maximum(prediction, 0).astype(float)
+
+
+def validate_demand_model_history(
+    model_id: str,
+    history: pd.DataFrame,
+    frequency: DemandFrequency,
+    seasonal_periods: int,
+    config: TimeSeriesModelConfig,
+) -> None:
+    """Check structural eligibility without fitting or inspecting future actuals."""
+    capability = demand_model_capability(model_id)
+    if frequency not in capability.frequencies or seasonal_periods < 1:
+        raise ValueError("Use supported MS/W-MON frequency and a positive seasonal length.")
+    minimum = capability.minimum_periods
+    if model_id == "moving_average":
+        minimum = max(minimum, config.average_periods)
+    if model_id == "seasonal_moving_average":
+        minimum = max(minimum, seasonal_periods * config.average_seasons)
+    if model_id == "ets" and config.ets_seasonal is not None:
+        if seasonal_periods < 2:
+            raise ContractViolation("Seasonal ETS requires a seasonal length of at least two.")
+        minimum = max(minimum, 2 * seasonal_periods)
+    if model_id in {"arima", "sarima"}:
+        p, d, q = config.arima_order
+        minimum = max(minimum, 2 * (p + d + q + 1))
+        if model_id == "sarima":
+            if seasonal_periods < 2:
+                raise ContractViolation("SARIMA requires a seasonal length of at least two.")
+            P, D, Q = config.sarima_order
+            minimum = max(
+                minimum, 2 * seasonal_periods, 2 * (p + d + q + (P + D + Q) * seasonal_periods + 1)
+            )
+    if len(history) < minimum:
+        raise ContractViolation(
+            f"{model_id} needs at least {minimum} available periods per series; "
+            "enlarge history/window or explicitly choose another forecaster."
+        )
+    dates = pd.DatetimeIndex(history["date"])
+    if not dates.is_unique or not dates.is_monotonic_increasing:
+        raise ContractViolation("Forecaster history must have unique chronological period dates.")
+    if capability.requires_contiguous_history and not dates.equals(
+        pd.date_range(start=dates[0], periods=len(dates), freq=frequency)
+    ):
+        raise ContractViolation(
+            f"{model_id} requires contiguous origin-available history; "
+            "resolve arrival gaps explicitly rather than compressing the calendar."
+        )
+    values = history[DEMAND_TARGET].to_numpy(dtype=float)
+    if not np.all(np.isfinite(values) & (values >= 0)):
+        raise ContractViolation("Forecaster history requires finite nonnegative demand.")
+
+
+class _StatisticalForecaster(_LocalForecaster):
+    """Guarded statsmodels adapters; fit failures never substitute another model."""
+
+    def fit(self, history: pd.DataFrame, frequency: DemandFrequency, seasonal_periods: int) -> None:
+        super().fit(history, frequency, seasonal_periods)
+        try:
+            from statsmodels.tools.sm_exceptions import ConvergenceWarning
+            from statsmodels.tsa.holtwinters import ExponentialSmoothing
+            from statsmodels.tsa.statespace.sarimax import SARIMAX
+        except ImportError as exc:
+            self._history = None
+            raise ImportError(
+                "Install optional statistical adapters with uv sync --extra forecasting."
+            ) from exc
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", ConvergenceWarning)
+                if self.capability.model_id == "ets":
+                    self._fitted = ExponentialSmoothing(
+                        self._values,
+                        trend=self.config.ets_trend,
+                        damped_trend=self.config.ets_damped,
+                        seasonal=self.config.ets_seasonal,
+                        seasonal_periods=seasonal_periods if self.config.ets_seasonal else None,
+                        initialization_method="estimated",
+                    ).fit(
+                        optimized=True,
+                        minimize_kwargs={"options": {"maxiter": self.config.statistical_maxiter}},
+                    )
+                else:
+                    seasonal_order = (
+                        (*self.config.sarima_order, seasonal_periods)
+                        if self.capability.model_id == "sarima"
+                        else (0, 0, 0, 0)
+                    )
+                    self._fitted = SARIMAX(
+                        self._values,
+                        order=self.config.arima_order,
+                        seasonal_order=seasonal_order,
+                        trend="n",
+                        enforce_stationarity=True,
+                        enforce_invertibility=True,
+                    ).fit(disp=False, maxiter=self.config.statistical_maxiter)
+        except (ConvergenceWarning, ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
+            self._history = None
+            raise ContractViolation(f"{self.capability.model_id} fit failed: {exc}") from exc
+
+    def predict(self, dates: pd.DatetimeIndex) -> NDArray[np.float64]:
+        leads = self._calendar_leads(dates)
+        prediction = np.asarray(self._fitted.forecast(int(leads[-1])), dtype=float)[leads - 1]
+        if not np.isfinite(prediction).all():
+            raise ContractViolation("Statistical forecaster produced nonfinite predictions.")
+        return np.maximum(prediction, 0).astype(float)
+
+
+def create_demand_forecaster(
+    model_id: str, config: TimeSeriesModelConfig | None = None
+) -> Forecaster:
+    """Create an independent model instance from the capability registry."""
+    capability = demand_model_capability(model_id)
+    constructor = (
+        _StatisticalForecaster if capability.provider == "statsmodels" else _LocalForecaster
+    )
+    return constructor(capability, config or TimeSeriesModelConfig())
+
+
+def forecast_demand_models(
+    actuals: pd.DataFrame,
+    request: DemandForecastRequest,
+    features: DemandFeatureConfig | None = None,
+    models: tuple[str, ...] = ("naive", "seasonal_naive", "ses", "holt_damped"),
+    parameters: TimeSeriesModelConfig | None = None,
+) -> pd.DataFrame:
+    """Fit local time-series states per series/origin and forecast requested models."""
+    if not models or len(set(models)) != len(models):
+        raise ValueError("Demand models must be nonempty and unique.")
+    for model_id in models:
+        demand_model_capability(model_id)
+    features = features or DemandFeatureConfig()
+    history = available_demand_history(actuals, request, features)
+    season = features.seasonal_periods or (12 if request.frequency == "MS" else 52)
+    forecasts: list[pd.DataFrame] = []
+    for model_id in models:
+        if model_id in {"naive", "seasonal_naive"}:
+            # Preserve the previously validated baseline contract and source semantics.
+            for baseline in ("naive", "seasonal_naive"):
+                if model_id == baseline:
+                    forecasts.append(
+                        forecast_demand_baselines(actuals, request, features, (baseline,))
+                    )
+            continue
+        records: list[dict[str, object]] = []
+        for key, series in history.groupby(DEMAND_SERIES_COLUMNS, sort=True):
+            forecaster = create_demand_forecaster(model_id, parameters)
+            forecaster.fit(series, request.frequency, season)
+            prediction = forecaster.predict(request.forecast_dates)
+            for horizon, (target_date, value) in enumerate(
+                zip(request.forecast_dates, prediction, strict=True), start=1
+            ):
+                records.append(
+                    {
+                        **dict(zip(DEMAND_SERIES_COLUMNS, key, strict=True)),
+                        "date": target_date,
+                        "frequency": request.frequency,
+                        "forecast_origin": request.origin,
+                        "horizon": horizon,
+                        "model_id": model_id,
+                        "predicted_demand_units": float(value),
+                        "source_date": series["date"].iloc[-1],
+                        "source_available_at": series["actual_available_at"].max(),
+                        "training_start": series["date"].iloc[0],
+                        "training_end": series["date"].iloc[-1],
+                        "n_training_periods": len(series),
+                        "schema_version": FORECAST_SCHEMA_VERSION,
+                        "forecast_kind": forecaster.capability.family,
+                        "approval_status": "unapproved",
+                    }
+                )
+        forecasts.append(pd.DataFrame(records, columns=FORECAST_COLUMNS))
+    return validate_demand_forecasts(pd.concat(forecasts, ignore_index=True), request)

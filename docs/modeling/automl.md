@@ -1,5 +1,11 @@
 # Automated ML: configuration, overfitting, and imbalanced data
 
+**Scope: inherited revenue regression only.** Demand requires Azure ML SDK v2
+**forecasting**, time/series/frequency/horizon configuration and temporal
+evaluation. This inherited regression builder is not the demand cloud path.
+See the [demand catalog](model-catalog.md) and
+[forecast metrics](time-series-metrics.md); demand cloud submission is pending.
+
 How this accelerator uses Azure **Automated ML** for the net-revenue regression,
 and how it follows Microsoft's guidance on preventing overfitting and handling
 imbalanced/skewed data.

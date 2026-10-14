@@ -89,7 +89,9 @@ def scorecard(
     predictions_path: Path = typer.Argument(..., help="Scored predictions (parquet/csv)"),
     actuals_path: Path = typer.Argument(..., help="Closed-month actuals with the target column"),
     baseline_wape: float | None = typer.Option(
-        None, "--baseline-wape", help="Manual-analyst baseline WAPE (fraction) for the beat-baseline KPI"
+        None,
+        "--baseline-wape",
+        help="Manual-analyst baseline WAPE (fraction) for the beat-baseline KPI",
     ),
 ) -> None:
     """Measure evaluation metrics against checkpoint targets and business KPIs."""
@@ -125,7 +127,9 @@ def scorecard(
             f"{float(row['margin']):+.4f}",
         )
     console.print(table)
-    console.print(f"[bold]Overall WAPE:[/] {overall['wape']:.4f}  [bold]bias:[/] {overall['bias']:+.4f}")
+    console.print(
+        f"[bold]Overall WAPE:[/] {overall['wape']:.4f}  [bold]bias:[/] {overall['bias']:+.4f}"
+    )
 
 
 @app.command("validate-data")
@@ -162,6 +166,297 @@ def info(environment: str = typer.Option("dev", "--env", "-e")) -> None:
     console.print(f"[bold]Candidates:[/] {settings.model.candidates}")
     console.print(f"[bold]Azure ML configured:[/] {settings.azure_ml.is_configured()}")
     console.print(f"[bold]Fabric configured:[/] {settings.fabric.is_configured()}")
+
+
+@app.command("backtest-demand")
+def backtest_demand(
+    frequency: str = typer.Option("MS", "--frequency", help="MS (monthly) or W-MON (weekly)"),
+    horizon: int = typer.Option(3, "--horizon", min=1),
+    n_origins: int = typer.Option(3, "--origins", min=1),
+    step_periods: int = typer.Option(1, "--step", min=1),
+    training_window: int | None = typer.Option(None, "--window", min=1),
+    seed: int = typer.Option(42, "--seed", min=0),
+    output_dir: Path = typer.Option(Path("outputs/demand-backtest"), "--out", "-o"),
+) -> None:
+    """Run synthetic-only demand baselines locally; no cloud or forecast approval."""
+    from pydantic import ValidationError
+
+    from revenue_prediction.core.data.contracts import ContractViolation
+    from revenue_prediction.core.data.demand_schema import DemandDataConfig
+    from revenue_prediction.core.data.io import write_dataset
+    from revenue_prediction.core.data.synthetic import generate_synthetic_demand_dataset
+    from revenue_prediction.core.training.demand_backtesting import (
+        DemandBacktestConfig,
+        run_demand_backtest,
+    )
+
+    try:
+        data_config = DemandDataConfig.model_validate({"frequency": frequency, "seed": seed})
+        actuals = generate_synthetic_demand_dataset(data_config)
+        dates = actuals["date"].drop_duplicates().sort_values()
+        first_index = len(dates) - horizon - (n_origins - 1) * step_periods
+        if first_index < 1:
+            raise typer.BadParameter(
+                "Requested origins/horizon exceed the synthetic history; reduce --origins, "
+                "--horizon or --step."
+            )
+        config = DemandBacktestConfig(
+            first_origin=dates.iloc[first_index].date(),
+            evaluation_as_of=actuals["actual_available_at"].max().date(),
+            frequency=data_config.frequency,
+            horizon=horizon,
+            n_origins=n_origins,
+            step_periods=step_periods,
+            strategy="sliding" if training_window is not None else "expanding",
+            training_window_periods=training_window,
+        )
+        result = run_demand_backtest(actuals, config)
+    except (ValidationError, ContractViolation) as exc:
+        console.print(f"Demand backtest failed: {exc}", style="red", markup=False)
+        raise typer.Exit(code=1) from exc
+
+    write_dataset(actuals, output_dir / "actuals.parquet")
+    write_dataset(result.predictions, output_dir / "backtest_predictions.parquet")
+    write_dataset(result.metrics, output_dir / "metrics.csv")
+    (output_dir / "data_config.json").write_text(
+        data_config.model_dump_json(indent=2), encoding="utf-8"
+    )
+    (output_dir / "backtest_config.json").write_text(
+        config.model_dump_json(indent=2), encoding="utf-8"
+    )
+    table = Table(title="Synthetic demand baselines (local, unapproved)")
+    for column in ("model_id", "horizon", "n_predictions", "mae", "wape", "bias_fraction"):
+        table.add_column(column)
+    for _, row in result.metrics.iterrows():
+        table.add_row(
+            str(row["model_id"]),
+            str(row["horizon"]),
+            str(row["n_predictions"]),
+            f"{row['mae']:.4f}",
+            f"{row['wape']:.4f}",
+            f"{row['bias_fraction']:+.4f}",
+        )
+    console.print(table)
+    console.print(
+        f"Wrote synthetic actuals, backtest predictions, metrics and config to {output_dir}"
+    )
+
+
+@app.command("demand-models")
+def demand_models() -> None:
+    """List implemented time-series forecasters and their executable capabilities."""
+    import json
+    from dataclasses import asdict
+
+    from revenue_prediction.core.models.demand_forecasters import demand_model_capabilities
+
+    console.print(
+        json.dumps([asdict(item) for item in demand_model_capabilities()], indent=2),
+        markup=False,
+    )
+
+
+@app.command("compare-demand")
+def compare_demand(
+    frequency: str = typer.Option("MS", "--frequency", help="MS or W-MON"),
+    horizon: int = typer.Option(3, "--horizon", min=1),
+    n_origins: int = typer.Option(
+        3, "--origins", min=1, help="Origins in each validation/holdout block"
+    ),
+    training_window: int | None = typer.Option(None, "--window", min=1),
+    primary_metric: str = typer.Option(
+        "mase", "--metric", help="mase, rmsse or wape (not regression R2/MAPE)"
+    ),
+    minimum_improvement: float = typer.Option(0.0, "--minimum-improvement", min=0),
+    max_abs_bias: float | None = typer.Option(None, "--max-abs-bias", min=0),
+    max_horizon_degradation: float | None = typer.Option(None, "--max-horizon-degradation", min=0),
+    models: str | None = typer.Option(
+        None,
+        "--models",
+        help="Comma-separated registry IDs; defaults preserve the seven original models",
+    ),
+    tuning_grid: Path | None = typer.Option(
+        None, "--tuning-grid", help="JSON array of predeclared TimeSeriesModelConfig objects"
+    ),
+    demand_pattern: str = typer.Option(
+        "regular", "--pattern", help="regular, intermittent, long_zero_runs or obsolescence"
+    ),
+    occurrence_probability: float = typer.Option(0.2, "--occurrence-probability"),
+    zero_run_periods: int = typer.Option(6, "--zero-run-periods", min=1),
+    obsolete_after_fraction: float = typer.Option(0.7, "--obsolete-after-fraction"),
+    n_skus: int = typer.Option(3, "--skus", min=1),
+    n_channels: int = typer.Option(2, "--channels", min=1),
+    n_geographies: int = typer.Option(2, "--geographies", min=1),
+    seed: int = typer.Option(42, "--seed", min=0),
+    output_dir: Path = typer.Option(Path("outputs/demand-comparison"), "--out", "-o"),
+) -> None:
+    """Compare synthetic time-series algorithms on validation, then fixed final holdout."""
+    import json
+    from dataclasses import asdict
+
+    from pydantic import ValidationError
+
+    from revenue_prediction.core.data.contracts import ContractViolation
+    from revenue_prediction.core.data.demand_forecast import DemandForecastRequest
+    from revenue_prediction.core.data.demand_schema import DemandDataConfig
+    from revenue_prediction.core.data.io import write_dataset
+    from revenue_prediction.core.data.synthetic import generate_synthetic_demand_dataset
+    from revenue_prediction.core.evaluation.demand_diagnostics import demand_training_diagnostics
+    from revenue_prediction.core.evaluation.demand_selection import (
+        DemandSelectionConfig,
+        run_demand_selection,
+    )
+    from revenue_prediction.core.evaluation.demand_tuning import (
+        DemandTuningConfig,
+        run_demand_tuning,
+    )
+    from revenue_prediction.core.features.demand import DemandFeatureConfig
+    from revenue_prediction.core.models.demand_forecasters import (
+        DEFAULT_DEMAND_MODELS,
+        demand_model_capabilities,
+    )
+    from revenue_prediction.core.training.demand_backtesting import DemandBacktestConfig
+
+    try:
+        data_config = DemandDataConfig.model_validate(
+            {
+                "frequency": frequency,
+                "seed": seed,
+                "demand_pattern": demand_pattern,
+                "occurrence_probability": occurrence_probability,
+                "zero_run_periods": zero_run_periods,
+                "obsolete_after_fraction": obsolete_after_fraction,
+                "n_skus": n_skus,
+                "n_channels": n_channels,
+                "n_geographies": n_geographies,
+            }
+        )
+        actuals = generate_synthetic_demand_dataset(data_config)
+        dates = actuals["date"].drop_duplicates().sort_values()
+        holdout_index = len(dates) - horizon - (n_origins - 1)
+        validation_index = holdout_index - horizon - (n_origins - 1)
+        if validation_index < 1:
+            raise typer.BadParameter(
+                "Reduce --origins/--horizon to leave training, validation and holdout history."
+            )
+        common = {
+            "frequency": data_config.frequency,
+            "horizon": horizon,
+            "n_origins": n_origins,
+            "models": tuple(item.strip() for item in models.split(","))
+            if models is not None
+            else DEFAULT_DEMAND_MODELS,
+            "strategy": "sliding" if training_window is not None else "expanding",
+            "training_window_periods": training_window,
+        }
+        validation = DemandBacktestConfig.model_validate(
+            {
+                **common,
+                "first_origin": dates.iloc[validation_index].date(),
+                "evaluation_as_of": dates.iloc[holdout_index].date(),
+            }
+        )
+        holdout = DemandBacktestConfig.model_validate(
+            {
+                **common,
+                "first_origin": dates.iloc[holdout_index].date(),
+                "evaluation_as_of": actuals["actual_available_at"].max().date(),
+            }
+        )
+        config = DemandSelectionConfig.model_validate(
+            {
+                "validation": validation,
+                "holdout": holdout,
+                "primary_metric": primary_metric,
+                "minimum_relative_improvement": minimum_improvement,
+                "max_abs_bias_fraction": max_abs_bias,
+                "max_horizon_relative_degradation": max_horizon_degradation,
+            }
+        )
+        tuned = None
+        tuning_config = None
+        if tuning_grid is not None:
+            tuning_config = DemandTuningConfig.model_validate(
+                {
+                    "experiment": config,
+                    "parameter_grid": json.loads(tuning_grid.read_text(encoding="utf-8")),
+                }
+            )
+            tuned = run_demand_tuning(actuals, tuning_config)
+            config, result = tuned.frozen_config, tuned.selection
+        else:
+            result = run_demand_selection(actuals, config)
+        diagnostics, eligibility = demand_training_diagnostics(
+            actuals,
+            DemandForecastRequest(
+                forecast_origin=config.validation.first_origin,
+                frequency=config.validation.frequency,
+            ),
+            DemandFeatureConfig(
+                seasonal_periods=config.validation.seasonal_periods,
+                training_window_periods=config.validation.training_window_periods,
+            ),
+            models=tuning_config.experiment.validation.models
+            if tuning_config is not None
+            else config.validation.models,
+            parameters=config.validation.model_parameters,
+        )
+    except (ValidationError, ContractViolation, ImportError, ValueError, OSError) as exc:
+        console.print(f"Demand comparison failed: {exc}", style="red", markup=False)
+        raise typer.Exit(code=1) from exc
+
+    write_dataset(actuals, output_dir / "actuals.parquet")
+    for phase, evaluation in (("validation", result.validation), ("holdout", result.holdout)):
+        write_dataset(evaluation.predictions, output_dir / f"{phase}_predictions.parquet")
+        write_dataset(evaluation.metrics, output_dir / f"{phase}_metrics.csv")
+        write_dataset(evaluation.series_metrics, output_dir / f"{phase}_series_metrics.csv")
+        write_dataset(evaluation.segment_metrics, output_dir / f"{phase}_segment_metrics.csv")
+    write_dataset(diagnostics, output_dir / "training_diagnostics.csv")
+    write_dataset(eligibility, output_dir / "model_eligibility.csv")
+    if tuned is not None and tuning_config is not None:
+        write_dataset(tuned.trial_ranking, output_dir / "tuning_trials.csv")
+        write_dataset(tuned.trial_metrics, output_dir / "tuning_metrics.csv")
+        (output_dir / "tuning_config.json").write_text(
+            tuning_config.model_dump_json(indent=2), encoding="utf-8"
+        )
+        (output_dir / "tuning_selection.json").write_text(
+            json.dumps({"selected_trial": tuned.selected_trial}), encoding="utf-8"
+        )
+        failures = tuned.trial_ranking.loc[
+            tuned.trial_ranking["selection_reason"] == "fit_or_evaluation_failed"
+        ]
+        if not failures.empty:
+            console.print("Rejected full-cohort trials (see tuning_trials.csv):", style="yellow")
+            for row in failures.itertuples(index=False):
+                console.print(f"Trial {row.trial}, {row.model_id}: {row.failure}", markup=False)
+    write_dataset(result.ranking, output_dir / "validation_ranking.csv")
+    for name, value in (
+        ("data_config", data_config),
+        ("experiment_config", config),
+        ("selection", result.decision),
+    ):
+        (output_dir / f"{name}.json").write_text(value.model_dump_json(indent=2), encoding="utf-8")
+    (output_dir / "model_capabilities.json").write_text(
+        json.dumps([asdict(item) for item in demand_model_capabilities()], indent=2),
+        encoding="utf-8",
+    )
+    table = Table(title="Time-series selection: validation only (local, unapproved)")
+    for column in ("model_id", "mase", "rmsse", "wape", "eligible", "selection_reason"):
+        table.add_column(column)
+    for _, row in result.ranking.iterrows():
+        table.add_row(
+            str(row["model_id"]),
+            f"{row['mase']:.4f}",
+            f"{row['rmsse']:.4f}",
+            f"{row['wape']:.4f}",
+            str(row["eligible"]),
+            str(row["selection_reason"]),
+        )
+    console.print(table)
+    console.print(
+        f"Validation-selected model: {result.decision.selected_model}; "
+        f"final holdout evaluated without reselection. Wrote results to {output_dir}"
+    )
 
 
 @app.command("serve")

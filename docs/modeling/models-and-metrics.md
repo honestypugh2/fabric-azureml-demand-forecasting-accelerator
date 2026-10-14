@@ -1,6 +1,10 @@
 # Models & evaluation metrics — a plain-language catalog
 
-This page defines **every model** the accelerator trains and compares, the
+**Scope: inherited revenue regression.** The new demand use case is
+time-series forecasting, with a separate [algorithm registry/catalog](model-catalog.md)
+and [MASE/RMSSE selection and metrics](time-series-metrics.md).
+
+This page defines the **revenue models** the accelerator trains and compares, the
 **class/type** of problem it is, and **every evaluation metric** — what it
 measures, its units, and how to use it. It is the reference behind the
 [model selection & evaluation guide](../patterns/model-selection-and-evaluation.md).

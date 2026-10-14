@@ -64,6 +64,17 @@ installed package metadata and on
 their respective project pages. No source from these packages is redistributed
 here beyond normal dependency usage.
 
+### Optional demand statistical forecasting
+
+The `forecasting` extra uses [statsmodels](https://www.statsmodels.org/) for
+optimized additive Holt-Winters and ARIMA/SARIMA estimation through its public
+APIs. Version 0.14.6 and its installed license were verified during this slice:
+BSD-3-Clause. Its Patsy dependency (verified 1.0.3) identifies BSD-2-Clause.
+Full license texts remain in the installed distributions. No library source,
+example implementation or documentation prose is copied or vendored here.
+The adapters, Croston/SBA/TSB recurrences and synthetic scenarios are original
+work. See [ADR 0008](docs/architecture/adr/0008-demand-adapters-and-tuning.md).
+
 ## 5. Datasets
 
 The default dataset is **generated synthetically** by
@@ -76,3 +87,21 @@ billing-amount-versus-net-revenue discussion.
 If a third-party dataset is ever added, its license must explicitly permit
 redistribution, and its provenance and license must be documented here and in
 `data/README.md`.
+
+## 6. Demand-repository lineage and first-slice review
+
+- **Inherited project:** `aml-revenue-prediction-accelerator`
+  (https://github.com/honestypugh2/aml-revenue-prediction-accelerator).
+- **License:** MIT; copyright (c) 2026 Revenue Prediction Accelerator Maintainers.
+  Its existing license and notices remain retained in this repository.
+- **Use:** The existing revenue implementation is preserved as the incremental
+  migration foundation, not modified in the original repository.
+- **Reference review:** On 2026-10-13, the LSTM donor's MIT license, file tree,
+  dependency manifest, LSTM model and preprocessing were reviewed read-only.
+  No additional donor source code, datasets or documentation were copied in
+  this slice. Future component reuse requires retaining its full license notice.
+- **Synthetic demand:** The additive demand generator is original seeded
+  synthetic work in `revenue_prediction.core.data.synthetic`; no external
+  dataset or real business prices/quantities are redistributed.
+- **Decision:** [ADR 0005](docs/architecture/adr/0005-demand-repository-inheritance.md)
+  and [reuse assessment](docs/assessment/reuse-decision.md).

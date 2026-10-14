@@ -1,4 +1,38 @@
-# Revenue Prediction Accelerator
+# Fabric + Azure ML Demand Forecasting Accelerator
+
+**Migration status: offline time-series forecasting, tuning and diagnostics slice.** This repository inherits the
+separate revenue-prediction accelerator. The existing CLI, training, API and
+educational UI still implement that revenue workflow; they have not yet been
+converted into a complete demand-forecasting application.
+
+**Demand is time-series forecasting, not the inherited revenue regression task.**
+The demand registry provides naive/seasonal-naive, moving-average, seasonal
+moving-average, drift, SES, damped Holt, Croston/SBA/TSB, and optional
+ETS/Holt-Winters, ARIMA and SARIMA adapters. Selection uses rolling
+validation **MASE by default**, with RMSSE/WAPE alternatives, horizon/bias
+diagnostics and a separate final holdout that cannot reselect the winner.
+Run the synthetic-only paths:
+
+```bash
+uv run revenue-prediction backtest-demand --out outputs/demand-monthly
+uv run revenue-prediction demand-models
+uv run revenue-prediction compare-demand --metric mase --out outputs/demand-comparison
+```
+
+See the [time-series model catalog](docs/modeling/model-catalog.md),
+[forecasting metrics/selection policy](docs/modeling/time-series-metrics.md),
+[validation-only tuning and sparse-demand demos](docs/modeling/tuning.md),
+[baseline/backtesting guide](docs/modeling/backtesting.md) and
+[origin/leakage contract](docs/data/leakage-prevention.md). Forecasts are local
+and unapproved; validation-only selection is not production approval or publication.
+Start with the
+[assessment](docs/assessment/current-state.md),
+[migration map](docs/assessment/migration-map.md),
+[requirements traceability](docs/assessment/customer-requirements-traceability.md),
+and [synthetic demand example](docs/data/synthetic-generator.md).
+The target architecture and cloud paths are not validated deployments.
+
+## Inherited revenue workflow (preserved)
 
 > **Reusable Azure Machine Learning accelerator** for predicting healthcare
 > **facility month-end net revenue** from **partial-month** operational and

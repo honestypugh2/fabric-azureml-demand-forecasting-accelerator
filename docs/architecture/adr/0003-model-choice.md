@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-07-24
+- Scope: Inherited revenue snapshot regression. Demand time-series forecasting
+  has a separate decision in [ADR 0007](0007-demand-time-series-model-selection.md);
+  this historical decision does not define demand's algorithms or metrics.
 
 ## Context
 

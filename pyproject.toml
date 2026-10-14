@@ -39,6 +39,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local seasonal statistical forecasting; guarded imports preserve the core path.
+forecasting = [
+    "statsmodels>=0.14.4,<0.15",
+]
 # Azure Machine Learning SDK v2 integration (job submission, AutoML,
 # registration, endpoints). Kept optional so core validation stays fast.
 azure = [

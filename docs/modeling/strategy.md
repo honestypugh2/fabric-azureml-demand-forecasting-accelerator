@@ -1,4 +1,10 @@
-# Modeling strategy
+# Inherited revenue modeling strategy
+
+**Scope: preserved revenue snapshot regression only.** Demand is a separate
+time-series forecasting problem; use its [model catalog](model-catalog.md),
+[forecast metrics](time-series-metrics.md) and
+[validation/holdout protocol](backtesting.md). Do not apply the regression
+task, algorithm defaults or revenue checkpoint thresholds below to demand.
 
 ## The problem is regression-first
 

@@ -29,6 +29,7 @@ import pandas as pd
 
 from revenue_prediction.config.models import DataConfig
 
+from .demand_schema import DEMAND_COLUMNS, DemandDataConfig, validate_demand_actuals
 from .schema import ALL_COLUMNS
 
 _SERVICE_LINES = ["acute_inpatient", "ambulatory_surgery", "emergency", "outpatient_clinic"]
@@ -291,3 +292,68 @@ class SyntheticDataGenerator:
 def generate_synthetic_dataset(config: DataConfig | None = None) -> pd.DataFrame:
     """Convenience wrapper returning a synthetic dataframe."""
     return SyntheticDataGenerator(config).generate()
+
+
+def generate_synthetic_demand_dataset(config: DemandDataConfig | None = None) -> pd.DataFrame:
+    """Generate deterministic historical beverage-demand actuals, not model inputs.
+
+    Each row represents a period x SKU x channel x geography. Prices and
+    promotions are realized historical values available only after period
+    close; they must not be treated as known-future plans during backtesting.
+    This additive API does not change the default revenue dataset or CLI.
+    """
+    config = config or DemandDataConfig()
+    rng = np.random.default_rng(config.seed)
+    dates = pd.date_range(
+        start=config.first_period, periods=config.period_count, freq=config.frequency
+    )
+    rows: list[dict[str, object]] = []
+    for period_index, period_start in enumerate(dates):
+        period_end = (
+            period_start + pd.offsets.MonthEnd(0)
+            if config.frequency == "MS"
+            else period_start + pd.Timedelta(days=6)
+        )
+        seasonality = 1.0 + 0.20 * np.sin(2 * np.pi * (period_start.dayofyear - 1) / 365.25)
+        trend = 1.0 + 0.10 * period_index / max(config.period_count - 1, 1)
+        for sku in range(config.n_skus):
+            for channel in range(config.n_channels):
+                for geography in range(config.n_geographies):
+                    promotion = bool(rng.random() < 0.15)
+                    unit_price = round((12.0 + 2 * sku) * (0.9 if promotion else 1.0), 2)
+                    baseline = 100.0 + 30 * sku + 10 * channel + 5 * geography
+                    noise = max(0.0, float(rng.normal(1.0, config.noise_scale)))
+                    demand = baseline * seasonality * trend * noise * (1.2 if promotion else 1.0)
+                    if config.demand_pattern != "regular":
+                        occurs = bool(rng.random() < config.occurrence_probability)
+                        if config.demand_pattern == "long_zero_runs":
+                            occurs = occurs and (
+                                period_index % (2 * config.zero_run_periods)
+                                >= config.zero_run_periods
+                            )
+                        if config.demand_pattern == "obsolescence":
+                            occurs = occurs and (
+                                period_index
+                                < int(config.period_count * config.obsolete_after_fraction)
+                            )
+                        demand = demand if occurs else 0.0
+                    rows.append(
+                        {
+                            "date": period_start,
+                            "sku_id": f"SKU-{sku + 1:03d}",
+                            "channel_id": f"CHANNEL-{channel + 1:03d}",
+                            "geography_id": f"REGION-{geography + 1:03d}",
+                            "brand_id": f"BRAND-{sku // 8 + 1:03d}",
+                            "product_family_id": f"FAMILY-{sku // 4 + 1:03d}",
+                            "product_id": f"PRODUCT-{sku // 2 + 1:03d}",
+                            "package_id": f"PACKAGE-{sku % 2 + 1:03d}",
+                            "frequency": config.frequency,
+                            "period_end": period_end,
+                            "actual_available_at": period_end
+                            + pd.Timedelta(days=config.close_delay_days),
+                            "unit_price": float(unit_price),
+                            "promotion": promotion,
+                            "demand_units": round(demand, 3),
+                        }
+                    )
+    return validate_demand_actuals(pd.DataFrame(rows, columns=DEMAND_COLUMNS))
