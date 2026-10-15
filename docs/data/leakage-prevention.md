@@ -17,7 +17,7 @@ input schema.
 
 An origin on 2021-01-01 forecasts January onward. An origin on 2021-01-15
 forecasts February onward. A Wednesday origin forecasts the next Monday-start
-week. This slice does not forecast the partly completed period.
+week. The demand workflow does not forecast the partly completed period.
 
 Explicit scope is independent of future actuals. If omitted, discover only
 series with actuals available at origin. Reject requested series without usable
@@ -62,7 +62,7 @@ window. A short window may make seasonal naive ineligible.
 Raw `demand_units`, realized `unit_price` and realized `promotion` are never
 included as inference columns. The target is consumed only as historical
 source data after arrival. Future plans and external forecast vintages are not
-supported by this slice.
+supported by this feature contract.
 
 ## Versioned point forecast output
 

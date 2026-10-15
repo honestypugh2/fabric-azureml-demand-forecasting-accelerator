@@ -1,7 +1,8 @@
 # Fabric + Azure ML Demand Forecasting Accelerator
 
-**Migration status: offline forecasting, tuning, point/interval artifacts and local
-model governance, plus frozen-hierarchy bottom-up point reconciliation.** This repository inherits the
+**Demand capabilities: offline forecasting, tuning, point/interval artifacts and local
+model governance, hierarchy-bound review/inference and out-of-sample weighted
+time-series ensembles.** This repository inherits the
 separate revenue-prediction accelerator. The existing CLI, training, API and
 educational UI still implement that revenue workflow; they have not yet been
 converted into a complete demand-forecasting application.
@@ -12,6 +13,8 @@ moving-average, drift, SES, damped Holt, Croston/SBA/TSB, and optional
 ETS/Holt-Winters, ARIMA and SARIMA adapters. Selection uses rolling
 validation **MASE by default**, with RMSSE/WAPE alternatives, horizon/bias
 diagnostics and a separate final holdout that cannot reselect the winner.
+An opt-in inverse-validation-error ensemble freezes portfolio weights before
+holdout; it competes under the same gates and is not automatically selected.
 Run the synthetic-only paths:
 
 ```bash
@@ -26,15 +29,13 @@ See the [time-series model catalog](docs/modeling/model-catalog.md),
 [safe model artifacts, cards, lineage and local approval](docs/governance/demand-model-lifecycle.md),
 [offline temporal interval calibration](docs/modeling/uncertainty.md),
 [hierarchical point reconciliation and per-level metrics](docs/modeling/reconciliation.md),
+[out-of-sample ensemble weights and composed governance](docs/modeling/ensembles.md),
 [baseline/backtesting guide](docs/modeling/backtesting.md) and
 [origin/leakage contract](docs/data/leakage-prevention.md). Forecasts are local
 and unapproved; validation-only selection is not production approval or publication.
-Start with the
-[assessment](docs/assessment/current-state.md),
-[migration map](docs/assessment/migration-map.md),
-[requirements traceability](docs/assessment/customer-requirements-traceability.md),
-and [synthetic demand example](docs/data/synthetic-generator.md).
-The target architecture and cloud paths are not validated deployments.
+Start with the [synthetic demand example](docs/data/synthetic-generator.md)
+and [package architecture](docs/architecture/demand-target-structure.md).
+Cloud examples and proposed architecture are not production deployment guarantees.
 
 ## Inherited revenue workflow (preserved)
 

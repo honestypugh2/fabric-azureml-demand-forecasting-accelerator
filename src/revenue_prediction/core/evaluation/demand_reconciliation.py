@@ -248,7 +248,9 @@ def run_demand_reconciliation(
         "experiment_sha256": content_digest(config.model_dump(mode="json")),
         "selection_sha256": content_digest(selected.decision.model_dump(mode="json")),
         "implementation_sha256": implementation_digest(),
-        "runtime": runtime_versions(selected.decision.selected_model),
+        "runtime": runtime_versions(
+            selected.decision.selected_model, selected.decision.selected_parameters
+        ),
         "forecast_approval_status": "unapproved",
         "aggregate_intervals": "unsupported",
     }

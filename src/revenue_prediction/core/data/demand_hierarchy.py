@@ -10,13 +10,13 @@ from pydantic import Field, model_validator
 
 from revenue_prediction.core.data.contracts import ContractViolation
 from revenue_prediction.core.data.demand_forecast import DemandForecastRequest, DemandSeriesKey
-from revenue_prediction.core.data.demand_schema import DEMAND_SERIES_COLUMNS
-from revenue_prediction.core.features.demand import DemandFeatureConfig, available_demand_history
-from revenue_prediction.core.inference.demand_artifacts import (
+from revenue_prediction.core.data.demand_records import (
     ArtifactRecord,
     Digest,
     content_digest,
 )
+from revenue_prediction.core.data.demand_schema import DEMAND_SERIES_COLUMNS
+from revenue_prediction.core.features.demand import DemandFeatureConfig, available_demand_history
 
 HIERARCHY_LEVELS = ("sku", "product", "family", "brand")
 HIERARCHY_PARENT_COLUMNS = ("product_id", "product_family_id", "brand_id")

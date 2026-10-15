@@ -9,12 +9,10 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
     model_serializer,
@@ -23,12 +21,38 @@ from pydantic import (
 
 from revenue_prediction.core.data.contracts import ContractViolation
 from revenue_prediction.core.data.demand_forecast import (
+    ENSEMBLE_FORECAST_SCHEMA_VERSION,
     FORECAST_COLUMNS,
     FORECAST_SCHEMA_VERSION,
     DemandForecastRequest,
     DemandSeriesKey,
     demand_period_offset,
     validate_demand_forecasts,
+)
+from revenue_prediction.core.data.demand_hierarchy import (
+    HIERARCHY_LEVELS,
+    NODE_COLUMNS,
+    DemandHierarchy,
+    expand_demand_hierarchy,
+    hierarchy_membership,
+)
+from revenue_prediction.core.data.demand_records import (
+    ActorId as ActorId,
+)
+from revenue_prediction.core.data.demand_records import (
+    ArtifactRecord as ArtifactRecord,
+)
+from revenue_prediction.core.data.demand_records import (
+    Digest as Digest,
+)
+from revenue_prediction.core.data.demand_records import (
+    canonical_json as canonical_json,
+)
+from revenue_prediction.core.data.demand_records import (
+    content_digest as content_digest,
+)
+from revenue_prediction.core.data.demand_records import (
+    dataframe_records as dataframe_records,
 )
 from revenue_prediction.core.data.demand_schema import DEMAND_SERIES_COLUMNS, DEMAND_TARGET
 from revenue_prediction.core.evaluation.demand_selection import (
@@ -46,42 +70,24 @@ from revenue_prediction.core.evaluation.demand_uncertainty import (
 from revenue_prediction.core.features.demand import DemandFeatureConfig, available_demand_history
 from revenue_prediction.core.models.demand_forecasters import (
     DemandForecasterState,
+    TimeSeriesModelConfig,
     create_demand_forecaster,
     demand_model_capability,
     restore_demand_forecaster,
 )
 
-Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-ActorId = Annotated[str, Field(pattern=r"^ACTOR-\d{3,}$")]
+if TYPE_CHECKING:
+    from revenue_prediction.core.evaluation.demand_reconciliation import DemandHierarchyEvaluation
 
 
-class ArtifactRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
-
-
-def canonical_json(value: object) -> str:
-    """One strict JSON representation for content IDs and audit-chain hashes."""
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
-    )
-
-
-def content_digest(value: object) -> str:
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
-
-
-def dataframe_records(frame: pd.DataFrame) -> list[dict[str, object]]:
-    """JSON scalars preserving full float precision, with explicit missing metrics."""
-    result = frame.copy()
-    for column in result:
-        if pd.api.types.is_datetime64_any_dtype(result[column]):
-            result[column] = result[column].map(lambda value: value.isoformat())
-    return result.astype(object).where(pd.notna(result), None).to_dict(orient="records")
-
-
-def runtime_versions(model_id: str) -> dict[str, str]:
+def runtime_versions(
+    model_id: str, parameters: TimeSeriesModelConfig | None = None
+) -> dict[str, str]:
     packages = ["numpy", "pandas", "pydantic"]
-    if demand_model_capability(model_id).provider == "statsmodels":
+    models = [model_id]
+    if model_id == "weighted_ensemble" and parameters is not None:
+        models += [item.model_id for item in parameters.ensemble_weights]
+    if any(demand_model_capability(name).provider == "statsmodels" for name in models):
         packages += ["statsmodels", "scipy"]
     return {"python": platform.python_version(), **{name: version(name) for name in packages}}
 
@@ -196,8 +202,61 @@ class DemandIntervalEvidence(ArtifactRecord):
     series_holdout_metrics: tuple[SeriesIntervalEvaluationMetric, ...] = Field(min_length=1)
 
 
+class HierarchyEvaluationMetric(EvaluationMetric):
+    hierarchy_level: Literal["sku", "product", "family", "brand"]
+
+
+class HierarchyNodeMetric(HierarchyEvaluationMetric):
+    node_id: str
+    channel_id: str
+    geography_id: str
+
+
+class HierarchyEvaluationEvidence(ArtifactRecord):
+    metrics: tuple[HierarchyEvaluationMetric, ...] = Field(min_length=1)
+    node_metrics: tuple[HierarchyNodeMetric, ...] = Field(min_length=1)
+    predictions_sha256: Digest
+    coherence_sha256: Digest
+    n_coherence_checks: int = Field(gt=0, strict=True)
+    all_coherent: Literal[True]
+    maximum_absolute_residual: float = Field(ge=0)
+
+
+class DemandHierarchyEvidence(ArtifactRecord):
+    schema_version: Literal["demand-hierarchy-evidence-v1"] = "demand-hierarchy-evidence-v1"
+    hierarchy: DemandHierarchy
+    method: Literal["bottom_up"] = "bottom_up"
+    aggregate_intervals: Literal["unsupported"] = "unsupported"
+    validation: HierarchyEvaluationEvidence
+    holdout: HierarchyEvaluationEvidence
+
+
+def _hierarchy_evidence(result: DemandHierarchyEvaluation) -> HierarchyEvaluationEvidence:
+    return HierarchyEvaluationEvidence(
+        metrics=tuple(
+            HierarchyEvaluationMetric.model_validate(row)
+            for row in dataframe_records(
+                result.metrics[list(HierarchyEvaluationMetric.model_fields)]
+            )
+        ),
+        node_metrics=tuple(
+            HierarchyNodeMetric.model_validate(row)
+            for row in dataframe_records(
+                result.node_metrics[list(HierarchyNodeMetric.model_fields)]
+            )
+        ),
+        predictions_sha256=content_digest(dataframe_records(result.predictions)),
+        coherence_sha256=content_digest(dataframe_records(result.coherence)),
+        n_coherence_checks=len(result.coherence),
+        all_coherent=bool(result.coherence.coherent.all()),
+        maximum_absolute_residual=float(result.coherence.absolute_residual.max()),
+    )
+
+
 class DemandBundlePayload(ArtifactRecord):
-    schema_version: Literal["demand-bundle-v1", "demand-bundle-v2"] = "demand-bundle-v1"
+    schema_version: Literal["demand-bundle-v1", "demand-bundle-v2", "demand-bundle-v3"] = (
+        "demand-bundle-v1"
+    )
     created_at: datetime
     created_by: ActorId
     origin: date
@@ -212,12 +271,15 @@ class DemandBundlePayload(ArtifactRecord):
     validation_metrics: tuple[EvaluationMetric, ...] = Field(min_length=1)
     holdout_metrics: tuple[EvaluationMetric, ...] = Field(min_length=1)
     uncertainty: DemandIntervalEvidence | None = None
+    reconciliation: DemandHierarchyEvidence | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         result = handler(self)
         if self.uncertainty is None:
             result.pop("uncertainty", None)
+        if self.reconciliation is None:
+            result.pop("reconciliation", None)
         return result
 
     @model_validator(mode="after")
@@ -232,6 +294,10 @@ class DemandBundlePayload(ArtifactRecord):
         uncertainty = self.uncertainty
         if (self.schema_version == "demand-bundle-v2") != (uncertainty is not None):
             raise ValueError("Only demand-bundle-v2 must contain interval evidence.")
+        if (self.schema_version == "demand-bundle-v3") != (
+            self.reconciliation is not None or self.experiment.ensemble_members is not None
+        ):
+            raise ValueError("Only demand-bundle-v3 must contain hierarchy or ensemble evidence.")
         selected_at = (
             uncertainty.experiment.calibration.first_origin
             if uncertainty is not None
@@ -244,11 +310,41 @@ class DemandBundlePayload(ArtifactRecord):
             or self.maximum_horizon != self.experiment.validation.horizon
         ):
             raise ValueError("Artifact frequency/horizon must match evaluated scope.")
+        weights = self.decision.ensemble_weights
+        expected_parameters = TimeSeriesModelConfig.model_validate(
+            {
+                **self.experiment.validation.model_parameters.model_dump(),
+                "ensemble_weights": weights
+                if self.decision.selected_model == "weighted_ensemble"
+                else (),
+            }
+        )
         if (
-            self.decision.selected_model not in self.experiment.validation.models
-            or self.decision.selected_parameters != self.experiment.validation.model_parameters
+            self.decision.selected_model not in self.experiment.validation_models
+            or self.decision.selected_parameters != expected_parameters
         ):
             raise ValueError("Selected model/parameters differ from frozen experiment.")
+        if self.experiment.ensemble_members is None:
+            if weights:
+                raise ValueError("Undeclared ensemble weight evidence.")
+        else:
+            TimeSeriesModelConfig.model_validate(
+                {
+                    **self.experiment.validation.model_parameters.model_dump(),
+                    "ensemble_weights": weights,
+                }
+            )
+            if tuple(row.model_id for row in weights) != tuple(
+                sorted(self.experiment.ensemble_members)
+            ):
+                raise ValueError("Ensemble weights must retain every declared component.")
+            scores = {
+                row.model_id: getattr(row, self.experiment.primary_metric)
+                for row in self.validation_metrics
+                if row.horizon == 0
+            }
+            if any(row.validation_error != scores.get(row.model_id) for row in weights):
+                raise ValueError("Ensemble weights differ from validation-only metric evidence.")
         if self.decision.primary_metric != self.experiment.primary_metric:
             raise ValueError("Decision metric differs from experiment.")
         keys = [item.series.key for item in self.series]
@@ -310,12 +406,12 @@ class DemandBundlePayload(ArtifactRecord):
         for metrics, models, n_origins in (
             (
                 self.validation_metrics,
-                set(self.experiment.validation.models),
+                self.experiment.validation_models,
                 self.experiment.validation.n_origins,
             ),
             (
                 self.holdout_metrics,
-                {"naive", "seasonal_naive", self.decision.selected_model},
+                set(self.experiment.holdout_models(self.decision.selected_model)),
                 self.experiment.holdout.n_origins,
             ),
         ):
@@ -352,7 +448,80 @@ class DemandBundlePayload(ArtifactRecord):
             raise ValueError("Selection scores differ from recorded validation evidence.")
         if uncertainty is not None:
             self._validate_uncertainty(uncertainty)
+        if self.reconciliation is not None:
+            self._validate_hierarchy(self.reconciliation)
         return self
+
+    def _validate_hierarchy(self, evidence: DemandHierarchyEvidence) -> None:
+        hierarchy = evidence.hierarchy
+        if (
+            hierarchy.payload.known_at > self.experiment.validation.first_origin
+            or {item.series.key for item in self.series} != {key.key for key in hierarchy.series}
+            or self.lineage.tuning_config_sha256 is not None
+        ):
+            raise ValueError("Hierarchy must match the complete origin-available untuned cohort.")
+        nodes = expand_demand_hierarchy(hierarchy_membership(hierarchy), hierarchy)[
+            NODE_COLUMNS
+        ].drop_duplicates()
+        node_keys = list(nodes.itertuples(index=False, name=None))
+        for block, config, models in [
+            (
+                evidence.validation,
+                self.experiment.validation,
+                self.experiment.validation_models,
+            ),
+            (
+                evidence.holdout,
+                self.experiment.holdout,
+                set(self.experiment.holdout_models(self.decision.selected_model)),
+            ),
+        ]:
+            expected = {
+                (model, horizon, *node)
+                for model in models
+                for horizon in range(self.maximum_horizon + 1)
+                for node in node_keys
+            }
+            actual = {
+                (
+                    row.model_id,
+                    row.horizon,
+                    row.hierarchy_level,
+                    row.node_id,
+                    row.channel_id,
+                    row.geography_id,
+                )
+                for row in block.node_metrics
+            }
+            levels = {
+                (model, horizon, level)
+                for model in models
+                for horizon in range(self.maximum_horizon + 1)
+                for level in HIERARCHY_LEVELS
+            }
+            if (
+                actual != expected
+                or len(block.node_metrics) != len(expected)
+                or {(row.model_id, row.horizon, row.hierarchy_level) for row in block.metrics}
+                != levels
+                or len(block.metrics) != len(levels)
+            ):
+                raise ValueError(
+                    "Hierarchy evidence requires every evaluated node/level/model/horizon."
+                )
+            counts = nodes.groupby("hierarchy_level").size().to_dict()
+            for row in (*block.metrics, *block.node_metrics):
+                count = config.n_origins * (self.maximum_horizon if row.horizon == 0 else 1)
+                if not isinstance(row, HierarchyNodeMetric):
+                    count *= counts[row.hierarchy_level]
+                if row.n_predictions != count:
+                    raise ValueError("Hierarchy evaluation counts differ from the complete cohort.")
+            n_parents = len(nodes.loc[nodes.hierarchy_level != "sku"])
+            if (
+                block.n_coherence_checks
+                != n_parents * len(models) * config.n_origins * self.maximum_horizon
+            ):
+                raise ValueError("Hierarchy coherence checks differ from complete parent scope.")
 
     def _validate_uncertainty(self, evidence: DemandIntervalEvidence) -> None:
         config, calibration = evidence.experiment, evidence.calibration
@@ -446,6 +615,7 @@ def build_demand_bundle(
     tuning: DemandTuningConfig | None = None,
     *,
     uncertainty: DemandUncertaintyConfig | None = None,
+    hierarchy: DemandHierarchy | None = None,
 ) -> DemandModelBundle:
     """Recompute evidence, freeze selected coefficients and bind all lineage hashes.
 
@@ -458,6 +628,17 @@ def build_demand_bundle(
         raise ContractViolation(
             "Interval packaging requires the matching selection and no tuning grid."
         )
+    if hierarchy is not None and (uncertainty is not None or tuning is not None):
+        raise ContractViolation(
+            "Hierarchy packaging is point-only and does not support tuning grids."
+        )
+    hierarchy_result = None
+    if hierarchy is not None:
+        from revenue_prediction.core.evaluation.demand_reconciliation import (
+            run_demand_reconciliation,
+        )
+
+        hierarchy_result = run_demand_reconciliation(actuals, experiment, hierarchy)
     interval_result = (
         run_demand_uncertainty(actuals, uncertainty) if uncertainty is not None else None
     )
@@ -469,6 +650,8 @@ def build_demand_bundle(
         if interval_result is not None
         else tuned.selection
         if tuned is not None
+        else hierarchy_result.selection
+        if hierarchy_result is not None
         else run_demand_selection(actuals, experiment)
     )
     scope = tuple(
@@ -525,7 +708,9 @@ def build_demand_bundle(
         holdout_predictions_sha256=content_digest(dataframe_records(result.holdout.predictions)),
         experiment_sha256=content_digest(experiment.model_dump(mode="json")),
         implementation_sha256=implementation_digest(),
-        runtime=runtime_versions(result.decision.selected_model),
+        runtime=runtime_versions(
+            result.decision.selected_model, result.decision.selected_parameters
+        ),
         tuning_config_sha256=content_digest(tuning.model_dump(mode="json")) if tuning else None,
         tuning_trials_sha256=content_digest(dataframe_records(tuned.trial_ranking))
         if tuned
@@ -533,7 +718,11 @@ def build_demand_bundle(
     )
     columns = list(EvaluationMetric.model_fields)
     payload = DemandBundlePayload(
-        schema_version="demand-bundle-v2" if interval_result is not None else "demand-bundle-v1",
+        schema_version="demand-bundle-v3"
+        if hierarchy_result is not None or experiment.ensemble_members is not None
+        else "demand-bundle-v2"
+        if interval_result is not None
+        else "demand-bundle-v1",
         created_at=datetime.now(UTC),
         created_by=created_by,
         origin=origin,
@@ -571,6 +760,13 @@ def build_demand_bundle(
         )
         if interval_result is not None and uncertainty is not None
         else None,
+        reconciliation=DemandHierarchyEvidence(
+            hierarchy=hierarchy_result.hierarchy,
+            validation=_hierarchy_evidence(hierarchy_result.validation),
+            holdout=_hierarchy_evidence(hierarchy_result.holdout),
+        )
+        if hierarchy_result is not None
+        else None,
     )
     return DemandModelBundle(
         artifact_id=content_digest(payload.model_dump(mode="json")), payload=payload
@@ -584,7 +780,9 @@ def verify_demand_bundle(bundle: DemandModelBundle) -> None:
         raise ContractViolation(
             "Bundle implementation differs; rebuild/review rather than silently upgrading."
         )
-    if bundle.payload.lineage.runtime != runtime_versions(bundle.payload.decision.selected_model):
+    if bundle.payload.lineage.runtime != runtime_versions(
+        bundle.payload.decision.selected_model, bundle.payload.decision.selected_parameters
+    ):
         raise ContractViolation(
             "Bundle runtime differs; restore the recorded environment or rebuild/review."
         )
@@ -659,7 +857,9 @@ def predict_demand_bundle(bundle: DemandModelBundle, horizon: int | None = None)
                     "training_start": item.observations[0].date,
                     "training_end": item.observations[-1].date,
                     "n_training_periods": len(item.observations),
-                    "schema_version": FORECAST_SCHEMA_VERSION,
+                    "schema_version": ENSEMBLE_FORECAST_SCHEMA_VERSION
+                    if payload.decision.selected_model == "weighted_ensemble"
+                    else FORECAST_SCHEMA_VERSION,
                     "forecast_kind": demand_model_capability(
                         payload.decision.selected_model
                     ).family,
@@ -702,6 +902,19 @@ def predict_demand_interval_bundle(
     return apply_demand_intervals(points, calibration)
 
 
+def predict_demand_hierarchy_bundle(
+    bundle: DemandModelBundle, horizon: int | None = None
+) -> pd.DataFrame:
+    """Reconcile restored points using only the reviewed frozen membership."""
+    from revenue_prediction.core.models.demand_reconciliation import reconcile_demand_points
+
+    points = predict_demand_bundle(bundle, horizon)
+    evidence = bundle.payload.reconciliation
+    if evidence is None:
+        raise ContractViolation("Hierarchy inference requires bound hierarchy evidence.")
+    return reconcile_demand_points(points, evidence.hierarchy)
+
+
 MODEL_LIMITATIONS = (
     "Synthetic-only local evidence; not customer accuracy or production approval.",
     "Univariate nonnegative point forecasts; no covariates, intervals or reconciliation.",
@@ -713,6 +926,19 @@ MODEL_LIMITATIONS = (
 
 
 def _model_limitations(payload: DemandBundlePayload) -> list[str]:
+    if payload.experiment.ensemble_members is not None:
+        return [item for item in MODEL_LIMITATIONS if "no covariates, intervals" not in item] + [
+            "Inverse rolling-validation-error weights are global across series and horizons.",
+            "Validation learns weights and selects models; only isolated holdout measures the frozen blend out of sample.",
+            "Every declared component must succeed, including zero-weight members; no fallback or renormalization.",
+            "Point-only ensemble; no ensemble/aggregate intervals, covariates or adaptive weights.",
+            "Frozen bottom-up hierarchy only when explicitly bound; no effective-dated reparenting.",
+        ]
+    if payload.reconciliation is not None:
+        return [item for item in MODEL_LIMITATIONS if "no covariates, intervals" not in item] + [
+            "Frozen static hierarchy, bottom-up points only; no aggregate intervals or reparenting.",
+            "Hierarchy availability and actor IDs are local assertions, not authenticated metadata.",
+        ]
     if payload.uncertainty is None:
         return list(MODEL_LIMITATIONS)
     return [item for item in MODEL_LIMITATIONS if "no covariates, intervals" not in item] + [
@@ -727,7 +953,11 @@ def demand_model_card(bundle: DemandModelBundle) -> dict[str, object]:
     verify_demand_bundle(bundle)
     payload = bundle.payload
     card: dict[str, object] = {
-        "schema_version": "demand-model-card-v2" if payload.uncertainty else "demand-model-card-v1",
+        "schema_version": "demand-model-card-v3"
+        if payload.schema_version == "demand-bundle-v3"
+        else "demand-model-card-v2"
+        if payload.uncertainty
+        else "demand-model-card-v1",
         "artifact_id": bundle.artifact_id,
         "created_at": payload.created_at.isoformat(),
         "created_by": payload.created_by,
@@ -760,6 +990,22 @@ def demand_model_card(bundle: DemandModelBundle) -> dict[str, object]:
     }
     if payload.uncertainty is not None:
         card["uncertainty"] = payload.uncertainty.model_dump(mode="json")
+    if payload.reconciliation is not None:
+        card["reconciliation"] = payload.reconciliation.model_dump(mode="json")
+    if payload.experiment.ensemble_members is not None:
+        card["ensemble"] = {
+            "method": "inverse_validation_error",
+            "metric": payload.experiment.primary_metric,
+            "weight_scope": "portfolio_all_horizons",
+            "weights": [item.model_dump(mode="json") for item in payload.decision.ensemble_weights],
+            "components": [
+                asdict(demand_model_capability(name))
+                for name in sorted(payload.experiment.ensemble_members)
+            ],
+            "zero_error_rule": "equal_weight_on_exact_zero_error_members",
+            "failure_policy": "fail_entire_run_no_component_removal",
+            "validation_role": "weight_learning_and_selection_not_unbiased_final_accuracy",
+        }
     return card
 
 

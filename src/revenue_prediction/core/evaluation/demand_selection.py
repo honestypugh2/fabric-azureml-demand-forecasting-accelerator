@@ -8,20 +8,33 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from revenue_prediction.core.data.contracts import ContractViolation
 from revenue_prediction.core.data.demand_forecast import (
+    ENSEMBLE_FORECAST_SCHEMA_VERSION,
     DemandForecastRequest,
     DemandSeriesKey,
     demand_period_offset,
 )
 from revenue_prediction.core.data.demand_schema import DEMAND_SERIES_COLUMNS
-from revenue_prediction.core.models.demand_forecasters import TimeSeriesModelConfig
+from revenue_prediction.core.models.demand_forecasters import (
+    EnsembleWeight,
+    TimeSeriesModelConfig,
+    inverse_error_weights,
+)
 from revenue_prediction.core.training.demand_backtesting import (
     DemandBacktestConfig,
     DemandBacktestResult,
     run_demand_backtest,
+    summarise_demand_backtest,
 )
 
 
@@ -36,10 +49,46 @@ class DemandSelectionConfig(BaseModel):
     minimum_relative_improvement: float = Field(default=0.0, ge=0, lt=1)
     max_abs_bias_fraction: float | None = Field(default=None, ge=0)
     max_horizon_relative_degradation: float | None = Field(default=None, ge=0)
+    ensemble_members: tuple[str, ...] | None = Field(default=None, min_length=2)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = handler(self)
+        if self.ensemble_members is None:
+            result.pop("ensemble_members", None)
+        return result
+
+    @property
+    def validation_models(self) -> set[str]:
+        return set(self.validation.models) | (
+            {"weighted_ensemble"} if self.ensemble_members else set()
+        )
+
+    def holdout_models(self, selected_model: str) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    "naive",
+                    "seasonal_naive",
+                    selected_model,
+                    *(self.ensemble_members or ()),
+                    *(("weighted_ensemble",) if self.ensemble_members else ()),
+                )
+            )
+        )
 
     @model_validator(mode="after")
     def _separated_evaluation(self) -> DemandSelectionConfig:
         validation, holdout = self.validation, self.holdout
+        if "weighted_ensemble" in validation.models or validation.model_parameters.ensemble_weights:
+            raise ValueError(
+                "Predeclare ensemble_members, not learned weights or weighted_ensemble in selection models."
+            )
+        if self.ensemble_members is not None and (
+            len(set(self.ensemble_members)) != len(self.ensemble_members)
+            or not set(self.ensemble_members).issubset(validation.models)
+        ):
+            raise ValueError("Ensemble members must be unique, predeclared validation algorithms.")
         if not {"naive", "seasonal_naive"}.issubset(validation.models):
             raise ValueError("Selection must compare both naive and seasonal_naive baselines.")
         for field in [
@@ -86,7 +135,7 @@ class DemandSelectionConfig(BaseModel):
 class DemandSelectionDecision(BaseModel):
     """Frozen local selection metadata, not production approval."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     selected_model: str
     primary_metric: str
@@ -96,6 +145,14 @@ class DemandSelectionDecision(BaseModel):
     reason: Literal["validation_winner", "seasonal_baseline_retained"]
     approval_status: Literal["unapproved"] = "unapproved"
     selected_parameters: TimeSeriesModelConfig = Field(default_factory=TimeSeriesModelConfig)
+    ensemble_weights: tuple[EnsembleWeight, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = handler(self)
+        if not self.ensemble_weights:
+            result.pop("ensemble_weights", None)
+        return result
 
 
 @dataclass(frozen=True)
@@ -157,7 +214,9 @@ def rank_demand_validation(
 
 
 def _select_on_validation(
-    validation: DemandBacktestResult, config: DemandSelectionConfig
+    validation: DemandBacktestResult,
+    config: DemandSelectionConfig,
+    ensemble_weights: tuple[EnsembleWeight, ...] = (),
 ) -> tuple[DemandSelectionDecision, pd.DataFrame]:
     metric = config.primary_metric
     ranking = rank_demand_validation(validation, config)
@@ -174,7 +233,15 @@ def _select_on_validation(
         validation_metric=float(selected[metric]),
         seasonal_naive_metric=reference,
         selected_at=config.holdout.first_origin,
-        selected_parameters=config.validation.model_parameters,
+        selected_parameters=TimeSeriesModelConfig.model_validate(
+            {
+                **config.validation.model_parameters.model_dump(),
+                "ensemble_weights": ensemble_weights,
+            }
+        )
+        if selected["model_id"] == "weighted_ensemble"
+        else config.validation.model_parameters,
+        ensemble_weights=ensemble_weights,
         reason="seasonal_baseline_retained"
         if selected["model_id"] == "seasonal_naive"
         else "validation_winner",
@@ -192,7 +259,11 @@ def run_demand_selection(
     reselected using holdout errors.
     """
     validation = run_demand_backtest(actuals, config.validation)
-    decision, ranking = _select_on_validation(validation, config)
+    weights: tuple[EnsembleWeight, ...] = ()
+    if config.ensemble_members is not None:
+        weights = learn_demand_ensemble_weights(validation, config)
+        validation = add_demand_ensemble_validation(validation, weights)
+    decision, ranking = _select_on_validation(validation, config, weights)
     holdout = evaluate_demand_holdout(actuals, config, validation, decision)
     return DemandSelectionResult(
         decision=decision, ranking=ranking, validation=validation, holdout=holdout
@@ -212,7 +283,81 @@ def evaluate_demand_holdout(
         .drop_duplicates()
         .itertuples(index=False, name=None)
     )
-    fixed_models = tuple(dict.fromkeys(("naive", "seasonal_naive", decision.selected_model)))
-    holdout_config = config.holdout.model_copy(update={"models": fixed_models, "series": scope})
+    fixed_models = config.holdout_models(decision.selected_model)
+    parameters = TimeSeriesModelConfig.model_validate(
+        {
+            **config.holdout.model_parameters.model_dump(),
+            "ensemble_weights": decision.ensemble_weights,
+        }
+    )
+    holdout_config = config.holdout.model_copy(
+        update={"models": fixed_models, "series": scope, "model_parameters": parameters}
+    )
     holdout = run_demand_backtest(actuals, holdout_config)
     return holdout
+
+
+def learn_demand_ensemble_weights(
+    validation: DemandBacktestResult, config: DemandSelectionConfig
+) -> tuple[EnsembleWeight, ...]:
+    """Learn one portfolio/horizon-shared blend from rolling out-of-sample errors."""
+    if config.ensemble_members is None:
+        raise ContractViolation("Ensemble members must be predeclared.")
+    names = sorted(config.ensemble_members)
+    metrics = validation.metrics.loc[validation.metrics.horizon == 0].set_index("model_id")
+    errors = tuple(float(metrics.loc[name, config.primary_metric]) for name in names)
+    weights = inverse_error_weights(errors)
+    return tuple(
+        EnsembleWeight(model_id=name, validation_error=error, weight=weight)
+        for name, error, weight in zip(names, errors, weights, strict=True)
+    )
+
+
+def add_demand_ensemble_validation(
+    validation: DemandBacktestResult, weights: tuple[EnsembleWeight, ...]
+) -> DemandBacktestResult:
+    """Blend identical complete out-of-sample grids; never drop a failed member."""
+    TimeSeriesModelConfig(ensemble_weights=weights)
+    keys = ["forecast_origin", *DEMAND_SERIES_COLUMNS, "horizon"]
+    members = [
+        validation.predictions.loc[validation.predictions.model_id == member.model_id]
+        .set_index(keys)
+        .sort_index()
+        for member in weights
+    ]
+    if not members or any(
+        frame.empty or not frame.index.is_unique or not frame.index.equals(members[0].index)
+        for frame in members
+    ):
+        raise ContractViolation(
+            "Ensemble validation requires every component on the identical complete grid."
+        )
+    common = [
+        "date",
+        "demand_units",
+        "mae_scale",
+        "mse_scale",
+        "training_start",
+        "training_end",
+        "n_training_periods",
+    ]
+    if any(not frame[common].equals(members[0][common]) for frame in members[1:]):
+        raise ContractViolation("Ensemble component truth/scales/training scope differ.")
+    ensemble = members[0].copy()
+    values = np.stack([frame.predicted_demand_units.to_numpy(dtype=float) for frame in members])
+    if not np.isfinite(values).all():
+        raise ContractViolation("Ensemble validation component predictions must be finite.")
+    ensemble["predicted_demand_units"] = np.asarray([item.weight for item in weights]) @ values
+    if not np.isfinite(ensemble.predicted_demand_units.to_numpy()).all():
+        raise ContractViolation("Ensemble validation predictions overflowed.")
+    ensemble["model_id"] = "weighted_ensemble"
+    ensemble["forecast_kind"] = "ensemble"
+    ensemble["schema_version"] = ENSEMBLE_FORECAST_SCHEMA_VERSION
+    ensemble["source_date"] = ensemble["training_end"]
+    ensemble["source_available_at"] = pd.concat(
+        [frame.source_available_at for frame in members], axis=1
+    ).max(axis=1)
+    ensemble["error"] = ensemble.predicted_demand_units - ensemble.demand_units
+    return summarise_demand_backtest(
+        pd.concat([validation.predictions, ensemble.reset_index()], ignore_index=True)
+    )

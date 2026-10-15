@@ -17,6 +17,7 @@ from .demand_schema import DEMAND_SERIES_COLUMNS
 DemandFrequency = Literal["MS", "W-MON"]
 DemandBaseline = Literal["naive", "seasonal_naive"]
 FORECAST_SCHEMA_VERSION = "demand-point-v1"
+ENSEMBLE_FORECAST_SCHEMA_VERSION = "demand-point-v2"
 FORECAST_COLUMNS = [
     "date",
     *DEMAND_SERIES_COLUMNS,
@@ -120,8 +121,10 @@ def validate_demand_forecasts(frame: pd.DataFrame, request: DemandForecastReques
         {
             "frequency": Column(str, pa.Check.eq(request.frequency)),
             "model_id": Column(str, pa.Check.isin(list(capabilities))),
-            "schema_version": Column(str, pa.Check.eq(FORECAST_SCHEMA_VERSION)),
-            "forecast_kind": Column(str, pa.Check.isin(["baseline", "statistical"])),
+            "schema_version": Column(
+                str, pa.Check.isin([FORECAST_SCHEMA_VERSION, ENSEMBLE_FORECAST_SCHEMA_VERSION])
+            ),
+            "forecast_kind": Column(str, pa.Check.isin(["baseline", "statistical", "ensemble"])),
             "approval_status": Column(str, pa.Check.eq("unapproved")),
             "horizon": Column(int, pa.Check.in_range(1, request.horizon)),
             "n_training_periods": Column(int, pa.Check.ge(1)),
@@ -145,6 +148,13 @@ def validate_demand_forecasts(frame: pd.DataFrame, request: DemandForecastReques
     expected_kinds = validated["model_id"].map(
         {key: item.family for key, item in capabilities.items()}
     )
+    expected_versions = validated["model_id"].map(
+        lambda name: ENSEMBLE_FORECAST_SCHEMA_VERSION
+        if name == "weighted_ensemble"
+        else FORECAST_SCHEMA_VERSION
+    )
+    if not np.all(validated["schema_version"].eq(expected_versions).to_numpy()):
+        raise ContractViolation("Point schema version must match the model capability.")
     if not np.all(validated["forecast_kind"].eq(expected_kinds).to_numpy()):
         raise ContractViolation(
             "Demand forecast schema failed: forecast_kind must match model capability."

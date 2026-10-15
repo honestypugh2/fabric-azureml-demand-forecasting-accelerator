@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,10 +11,18 @@ from typing import Annotated, Literal, Protocol
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from revenue_prediction.core.data.contracts import ContractViolation
 from revenue_prediction.core.data.demand_forecast import (
+    ENSEMBLE_FORECAST_SCHEMA_VERSION,
     FORECAST_COLUMNS,
     FORECAST_SCHEMA_VERSION,
     DemandForecastRequest,
@@ -24,6 +33,29 @@ from revenue_prediction.core.data.demand_forecast import (
 from revenue_prediction.core.data.demand_schema import DEMAND_SERIES_COLUMNS, DEMAND_TARGET
 from revenue_prediction.core.features.demand import DemandFeatureConfig, available_demand_history
 from revenue_prediction.core.models.demand_baselines import forecast_demand_baselines
+
+
+class EnsembleWeight(BaseModel):
+    """One declared member, its out-of-sample error and frozen portfolio weight."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    model_id: str
+    validation_error: float = Field(ge=0)
+    weight: float = Field(ge=0, le=1)
+
+
+def inverse_error_weights(errors: tuple[float, ...]) -> tuple[float, ...]:
+    """Normalize inverse errors stably; exact-zero members share all mass."""
+    if len(errors) < 2 or any(not math.isfinite(error) or error < 0 for error in errors):
+        raise ContractViolation("Ensemble needs at least two finite nonnegative validation errors.")
+    zeros = errors.count(0.0)
+    if zeros:
+        return tuple(1.0 / zeros if error == 0 else 0.0 for error in errors)
+    minimum = min(errors)
+    scaled = tuple(minimum / error for error in errors)
+    total = math.fsum(scaled)
+    return tuple(value / total for value in scaled)
 
 
 class TimeSeriesModelConfig(BaseModel):
@@ -50,6 +82,14 @@ class TimeSeriesModelConfig(BaseModel):
         Annotated[int, Field(strict=True, ge=0, le=5)],
     ] = (1, 0, 0)
     statistical_maxiter: int = Field(default=200, ge=1, le=2000, strict=True)
+    ensemble_weights: tuple[EnsembleWeight, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = handler(self)
+        if not self.ensemble_weights:
+            result.pop("ensemble_weights", None)
+        return result
 
     @model_validator(mode="after")
     def _statistical_parameters(self) -> TimeSeriesModelConfig:
@@ -58,6 +98,17 @@ class TimeSeriesModelConfig(BaseModel):
         for order in (self.arima_order, self.sarima_order):
             if any(type(value) is not int or value < 0 or value > 5 for value in order):
                 raise ValueError("ARIMA orders must contain three integers between 0 and 5.")
+        if self.ensemble_weights:
+            names = [item.model_id for item in self.ensemble_weights]
+            if names != sorted(set(names)) or "weighted_ensemble" in names:
+                raise ValueError("Ensemble components must be unique, sorted and not nested.")
+            for name in names:
+                demand_model_capability(name)
+            expected = inverse_error_weights(
+                tuple(item.validation_error for item in self.ensemble_weights)
+            )
+            if tuple(item.weight for item in self.ensemble_weights) != expected:
+                raise ValueError("Ensemble weights differ from the declared inverse-error rule.")
         return self
 
 
@@ -66,7 +117,7 @@ class ForecasterCapability:
     """Truthful executable capabilities and history requirements."""
 
     model_id: str
-    family: Literal["baseline", "statistical"]
+    family: Literal["baseline", "statistical", "ensemble"]
     description: str
     minimum_periods: int
     requires_contiguous_history: bool
@@ -81,6 +132,7 @@ class ForecasterCapability:
     local_execution: bool = True
     azure_execution_validated: bool = False
     supports_json_state: bool = True
+    requires_validation_weights: bool = False
 
 
 _CAPABILITIES = (
@@ -144,6 +196,14 @@ _CAPABILITIES = (
         license="BSD-3-Clause",
         required_extras=("forecasting",),
     ),
+    ForecasterCapability(
+        "weighted_ensemble",
+        "ensemble",
+        "Frozen nonnegative inverse-validation-error blend; no component fallback.",
+        1,
+        False,
+        requires_validation_weights=True,
+    ),
 )
 
 # Preserve the original offline comparison and avoid implicit optional dependencies.
@@ -192,7 +252,7 @@ class DemandForecasterState(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    schema_version: Literal["demand-state-v1"] = "demand-state-v1"
+    schema_version: Literal["demand-state-v1", "demand-state-v2"] = "demand-state-v1"
     model_id: str
     parameters: TimeSeriesModelConfig
     frequency: DemandFrequency
@@ -201,10 +261,42 @@ class DemandForecasterState(BaseModel):
     values: tuple[Annotated[float, Field(ge=0)], ...] = Field(min_length=1)
     holt_winters: HoltWintersState | None = None
     arima_parameters: tuple[float, ...] | None = Field(default=None, min_length=1)
+    components: tuple[DemandForecasterState, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = handler(self)
+        if not self.components:
+            result.pop("components", None)
+        return result
 
     @model_validator(mode="after")
     def _consistent_state(self) -> DemandForecasterState:
         demand_model_capability(self.model_id)
+        ensemble = self.model_id == "weighted_ensemble"
+        if (self.schema_version == "demand-state-v2") != ensemble or bool(
+            self.components
+        ) != ensemble:
+            raise ValueError("Only ensemble v2 state must contain component states.")
+        if ensemble:
+            weights = self.parameters.ensemble_weights
+            parameters = self.parameters.model_dump(exclude={"ensemble_weights"})
+            if not weights or tuple(row.model_id for row in self.components) != tuple(
+                row.model_id for row in weights
+            ):
+                raise ValueError("Ensemble state differs from all declared components.")
+            for component in self.components:
+                if (
+                    component.dates != self.dates
+                    or component.values != self.values
+                    or component.frequency != self.frequency
+                    or component.seasonal_periods != self.seasonal_periods
+                    or component.parameters.model_dump() != parameters
+                    or component.model_id == "weighted_ensemble"
+                ):
+                    raise ValueError(
+                        "Component state must match the complete shared training/configuration."
+                    )
         if len(self.dates) != len(self.values):
             raise ValueError("State dates and values must have identical lengths.")
         if any(
@@ -444,6 +536,52 @@ def validate_demand_model_history(
         raise ContractViolation("Forecaster history requires finite nonnegative demand.")
 
 
+class _EnsembleForecaster(_LocalForecaster):
+    def __init__(self, capability: ForecasterCapability, config: TimeSeriesModelConfig) -> None:
+        super().__init__(capability, config)
+        if not config.ensemble_weights:
+            raise ContractViolation("weighted_ensemble requires frozen validation-learned weights.")
+        self._components: tuple[Forecaster, ...] = ()
+
+    def fit(self, history: pd.DataFrame, frequency: DemandFrequency, seasonal_periods: int) -> None:
+        self._components = ()
+        super().fit(history, frequency, seasonal_periods)
+        parameters = TimeSeriesModelConfig.model_validate(
+            self.config.model_dump(exclude={"ensemble_weights"})
+        )
+        components: list[Forecaster] = []
+        for member in self.config.ensemble_weights:
+            component = create_demand_forecaster(member.model_id, parameters)
+            component.fit(history, frequency, seasonal_periods)
+            components.append(component)
+        self._components = tuple(components)
+
+    def predict(self, dates: pd.DatetimeIndex) -> NDArray[np.float64]:
+        self._calendar_leads(dates)
+        if len(self._components) != len(self.config.ensemble_weights):
+            raise ContractViolation("Ensemble requires every fitted component; no fallback.")
+        values = np.stack([component.predict(dates) for component in self._components])
+        weights = np.asarray([item.weight for item in self.config.ensemble_weights])
+        prediction = weights @ values
+        if not np.isfinite(prediction).all():
+            raise ContractViolation("Ensemble produced nonfinite predictions; no fallback.")
+        return prediction.astype(float)
+
+    def export_state(self) -> DemandForecasterState:
+        if self._history is None:
+            raise RuntimeError("Fit before exporting forecaster state.")
+        return DemandForecasterState(
+            schema_version="demand-state-v2",
+            model_id=self.capability.model_id,
+            parameters=self.config,
+            frequency=self._frequency,
+            seasonal_periods=self._season,
+            dates=tuple(pd.Timestamp(value).to_pydatetime() for value in self._history["date"]),
+            values=tuple(float(value) for value in self._values),
+            components=tuple(component.export_state() for component in self._components),
+        )
+
+
 class _StatisticalForecaster(_LocalForecaster):
     """Guarded statsmodels adapters; fit failures never substitute another model."""
 
@@ -533,6 +671,12 @@ def restore_demand_forecaster(state: DemandForecasterState) -> Forecaster:
     """Reconstruct numeric state with fixed coefficients; no pickle or optimizer."""
     state = DemandForecasterState.model_validate(state.model_dump())
     capability = demand_model_capability(state.model_id)
+    if state.model_id == "weighted_ensemble":
+        ensemble = _EnsembleForecaster(capability, state.parameters)
+        history = pd.DataFrame({"date": pd.to_datetime(state.dates), DEMAND_TARGET: state.values})
+        _LocalForecaster.fit(ensemble, history, state.frequency, state.seasonal_periods)
+        ensemble._components = tuple(restore_demand_forecaster(item) for item in state.components)
+        return ensemble
     model = (
         _StatisticalForecaster(capability, state.parameters)
         if capability.provider == "statsmodels"
@@ -600,6 +744,8 @@ def create_demand_forecaster(
 ) -> Forecaster:
     """Create an independent model instance from the capability registry."""
     capability = demand_model_capability(model_id)
+    if model_id == "weighted_ensemble":
+        return _EnsembleForecaster(capability, config or TimeSeriesModelConfig())
     constructor = (
         _StatisticalForecaster if capability.provider == "statsmodels" else _LocalForecaster
     )
@@ -653,7 +799,9 @@ def forecast_demand_models(
                         "training_start": series["date"].iloc[0],
                         "training_end": series["date"].iloc[-1],
                         "n_training_periods": len(series),
-                        "schema_version": FORECAST_SCHEMA_VERSION,
+                        "schema_version": ENSEMBLE_FORECAST_SCHEMA_VERSION
+                        if model_id == "weighted_ensemble"
+                        else FORECAST_SCHEMA_VERSION,
                         "forecast_kind": forecaster.capability.family,
                         "approval_status": "unapproved",
                     }

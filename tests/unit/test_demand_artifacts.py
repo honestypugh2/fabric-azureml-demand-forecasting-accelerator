@@ -39,7 +39,9 @@ from revenue_prediction.core.models.demand_forecasters import (
 from revenue_prediction.core.training.demand_backtesting import DemandBacktestConfig
 
 pytestmark = pytest.mark.unit
-MODEL_IDS = tuple(item.model_id for item in demand_model_capabilities())
+MODEL_IDS = tuple(
+    item.model_id for item in demand_model_capabilities() if not item.requires_validation_weights
+)
 
 
 def synthetic_history(frequency: str = "MS", n_skus: int = 1, n_periods: int = 60) -> pd.DataFrame:

@@ -1,6 +1,6 @@
 # Synthetic demand foundation
 
-This first-slice generator is an additive, offline historical-actuals example.
+This generator provides additive, offline historical-actuals examples.
 It does not replace revenue generation, train a demand model, or connect to
 Fabric/Azure. All values are original, seeded synthetic examples.
 
@@ -123,10 +123,32 @@ Tests:
 Run `uv run pytest -q tests/unit/test_synthetic_demand.py tests/contract/test_demand_contracts.py`,
 then `make check`.
 
-## Not yet implemented
+## Scope and input limitations
 
-Weather/sentiment/events, launches/retirements, intermittent demand, missing
-observations/outliers, inventory/production constraints, stock-outs, medallion
-outputs, hierarchy/calendar/scenario tables and forecast-output schemas remain
-in [the backlog](../assessment/gap-analysis.md). No production or accuracy
-claims follow from synthetic contract tests.
+Synthetic histories do not establish production accuracy or business acceptance.
+Weather/sentiment/event inputs, stock-out censoring, inventory/production
+constraints, revision vintages and future-covariate feature contracts require
+separate domain designs. Parquet examples are not governed Fabric Delta tables.
+For forecasting outputs and supported algorithms, use the
+[model catalog](../modeling/model-catalog.md),
+[uncertainty guide](../modeling/uncertainty.md) and
+[hierarchy guide](../modeling/reconciliation.md).
+
+## Data-discovery questions
+
+Before adapting the accelerator to a real planning process, establish:
+
+- Whether the target is shipments, orders, depletions, observed sales or
+  estimated unconstrained demand, including units and returns policy.
+- Series grain, weekly boundary, month convention, timezone and hierarchy
+  versions.
+- Actual close, arrival and revision timing, and whether vintages are retained.
+- Representation of stock-outs, backorders, launches and retirements.
+- Which future prices/promotions are committed plans rather than actuals.
+- External-source licensing, timestamps and availability at each origin.
+- Required horizons, reforecast schedules, business costs and segment gates.
+- Model/scenario/override/official-forecast approval roles, retention and
+  tenant boundaries.
+
+Use discovery answers as configuration and documented decisions, not embedded
+customer assumptions.

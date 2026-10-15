@@ -35,6 +35,10 @@ class DemandTuningConfig(BaseModel):
 
     @model_validator(mode="after")
     def _unique_trials(self) -> DemandTuningConfig:
+        if self.experiment.ensemble_members is not None or any(
+            row.ensemble_weights for row in self.parameter_grid
+        ):
+            raise ValueError("Ensemble weighting and parameter-grid tuning cannot be combined.")
         if len(set(self.parameter_grid)) != len(self.parameter_grid):
             raise ValueError("Parameter-grid trials must be unique.")
         return self

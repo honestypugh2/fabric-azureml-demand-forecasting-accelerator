@@ -6,7 +6,7 @@
 
 ## Context
 
-The first slice introduced demand actuals with explicit arrival timestamps.
+Demand actuals carry explicit arrival timestamps.
 Revenue snapshot features and month-based regression splitting cannot simply
 be relabeled as future-demand inference. Demand baselines must establish a
 leakage-safe benchmark before learned models, ensembles or cloud submission.
@@ -72,8 +72,8 @@ policies and new-product inference remain separate work.
 Overlapping forecast horizons produce repeated evaluations of a target at
 different origins. Metrics weight forecast rows, not unique actual periods.
 Results do not select/approve a champion or calculate ensemble weights. A final
-holdout, segment/business-cost gates, MASE, uncertainty and reconciliation remain
-required in later slices.
+holdout, segment/business-cost gates, scaled metrics, uncertainty and
+reconciliation require separate evaluation and governance contracts.
 
 Forecast provenance is validated metadata, not an independent proof of model
 lineage or a digital signature. Registry versions, run identifiers and approval

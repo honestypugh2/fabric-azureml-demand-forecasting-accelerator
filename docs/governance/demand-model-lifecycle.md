@@ -1,13 +1,90 @@
 # Demand model artifacts, lineage and local approval
 
-Slice 5 and the slice-6 follow-up implement an **offline synthetic model lifecycle**. It is separate
+The demand workflow provides an **offline synthetic model lifecycle**. It is separate
 from the inherited revenue MLflow/joblib path and from production Azure ML or
 Fabric authorization. Nothing in this workflow deploys a model, writes an
 official forecast or authenticates a person.
 
+## Hierarchy-bound and ensemble-aware v3 lifecycle
+
+The same lifecycle now supports `demand-bundle-v3`, `demand-model-card-v3`,
+`demand-local-policy-v3` and `demand-inference-lineage-v3`. V3 is point-only
+and requires hierarchy and/or predeclared out-of-sample ensemble evidence.
+Point v1 and interval v2 formats/commands remain supported with their existing
+policy boundaries; neither policy silently authorizes the new capabilities.
+
+Hierarchy packaging binds the exact immutable snapshot, known by the first
+validation origin and matching its complete cohort/parents. It recomputes
+selection, bottom-up validation/holdout, level/node metrics and complete
+parent-child coherence evidence. Cards record membership/version, method,
+training policy, metrics, counts and hashes. Editable reconciliation CSVs or
+lineage files are not approval inputs.
+
+Hierarchy policy explicitly covers SKU/product/family/brand. Selected primary
+metric and bias limits and optional seasonal noninferiority apply to **every
+level, node/channel/geography and horizon**, including horizon zero. Coherence
+has an explicit maximum absolute residual, in addition to the underlying
+relative/absolute contract tolerances. Missing/undefined evidence blocks rather
+than passing via a portfolio average. Policies are declared before examining
+holdout; illustrative limits are not production recommendations.
+
+```bash
+uv run revenue-prediction reconcile-demand \
+  --config configs/examples/demand-reconciliation.json \
+  --out outputs/demand-hierarchy-review-comparison
+
+uv run revenue-prediction demand-lifecycle package \
+  --comparison-dir outputs/demand-hierarchy-review-comparison \
+  --include-hierarchy --origin 2025-01-01 --actor ACTOR-001 \
+  --out outputs/demand-hierarchy-review-artifact
+
+uv run revenue-prediction demand-lifecycle init-registry \
+  --registry outputs/demand-hierarchy-review.sqlite \
+  --policy configs/examples/demand-hierarchy-approval.json
+```
+
+Then register/submit/review using the existing commands below and the new
+artifact ID. Approval can fail on the synthetic example; do not relax policy
+or reselect based on holdout. Only after successful independent approval:
+
+```bash
+uv run revenue-prediction demand-lifecycle forecast \
+  --registry outputs/demand-hierarchy-review.sqlite \
+  --artifact-id ARTIFACT_SHA256_PLACEHOLDER \
+  --include-hierarchy --horizon 2 --out outputs/demand-hierarchy-review-inference
+```
+
+Hierarchy inference restores the reviewed winner and reuses bottom-up sums
+against **only its bound hierarchy**. It cannot accept new actuals, origins,
+members or labels. Shorter evaluated horizons are allowed. The sidecar binds
+hierarchy/evidence/output hashes and the current approval revision. Revocation
+blocks future exports; it cannot retract files already exported. Omitting
+`--include-hierarchy` still returns the reviewed bottom-level points.
+
+Ensembles use [inverse validation-error weighting](../modeling/ensembles.md),
+with frozen errors/weights and complete numeric component states when selected.
+V3 requires explicit ensemble method, maximum component weight and minimum
+validation origins. Existing selected-model holdout gates still apply, and
+combined hierarchy/ensemble artifacts require **both** policy sections.
+Weight evidence remains bound even when a nonensemble candidate wins.
+
+Examples: [hierarchy policy](../../configs/examples/demand-hierarchy-approval.json),
+[ensemble policy](../../configs/examples/demand-ensemble-approval.json),
+[composed policy](../../configs/examples/demand-hierarchy-ensemble-approval.json).
+No v3 interval capability is claimed: combined `--include-intervals` and
+`--include-hierarchy` fail explicitly. Ensemble interval calibration and
+tuning-grid combination are also deliberately unsupported.
+
+All output rows remain unapproved. Hierarchy availability, actor IDs and
+synthetic classification are local declarations, not authenticated assertions.
+No cloud deployment, official forecast approval or protected ledger is added.
+See [ADR 0013](../architecture/adr/0013-demand-hierarchy-lifecycle.md) and
+[ADR 0014](../architecture/adr/0014-demand-out-of-sample-ensembles.md).
+
 ## Safe, fitted model serialization
 
-All thirteen registry models export `demand-state-v1` numeric JSON state.
+The thirteen standalone algorithms export `demand-state-v1` numeric JSON state;
+the opt-in weighted composition exports `demand-state-v2` with its component states.
 `demand-bundle-v1` packages the selected model per series, its exact parameters,
 closed/arrived training observations, frozen forecast origin, evaluated maximum
 horizon and runtime/source compatibility metadata.

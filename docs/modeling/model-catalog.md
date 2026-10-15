@@ -41,20 +41,30 @@ The old `forecast_demand_baselines` API remains unchanged.
 | `ets` | Optimized additive Holt-Winters | Level, optional trend and seasonality | `forecasting` extra; seasonal fits need at least two complete seasons and `m >= 2` |
 | `arima` | Nonseasonal ARIMA | Integrated/autocorrelated dynamics | `forecasting` extra; at least `max(8, 2*(p+d+q+1))` contiguous periods |
 | `sarima` | Seasonal ARIMA | Seasonal integrated/autocorrelated dynamics | `forecasting` extra; `m >= 2`, at least `max(8, 2*m, 2*(p+d+q+(P+D+Q)*m+1))` contiguous periods |
+| `weighted_ensemble` | Frozen inverse-validation-error composition | Complementary time-series component errors | Opt-in `ensemble_members`; at least two declared members, complete out-of-sample validation, defined primary errors, every member must succeed |
 
 The ten baseline/smoothing/intermittent implementations are original NumPy work
 under the repository's MIT license. The three optional statistical adapters
 call BSD-3-Clause statsmodels APIs; no library source is copied. Install with
 `uv sync --extra forecasting` (add `--extra api` to retain the API environment).
 All support `MS`/`W-MON`, local univariate
-point forecasting. A separate [residual-calibration wrapper](uncertainty.md)
-adds offline prediction intervals without changing their point predictions.
+point forecasting. For the thirteen standalone algorithms, a separate
+[residual-calibration wrapper](uncertainty.md) adds offline prediction intervals
+without changing point predictions; ensemble interval calibration is unsupported.
 No learned quantile model, covariates or live Azure validation is claimed.
 [Bottom-up point reconciliation](reconciliation.md) is a separate deterministic
 hierarchy layer, not a new forecaster or aggregate uncertainty method.
-All thirteen support versioned data-only JSON state, frozen-origin bundles,
+The thirteen standalone algorithms and the weighted composition support
+versioned data-only JSON state, frozen-origin bundles,
 model cards and [local approval controls](../governance/demand-model-lifecycle.md).
 Production cloud registration and authenticated approval remain future work.
+The composition is not an additional default candidate or an independently
+trainable estimator: `requires_validation_weights=true` in registry metadata.
+Use `compare-demand --ensemble-members ...` or the
+[ensemble configurations](ensembles.md), not manually learned weights in the
+selection input. Only ensemble rows use `demand-point-v2`/`forecast_kind=ensemble`;
+the thirteen existing algorithms keep point v1. Ensembles/hierarchies use
+explicit v3 artifact/card/policy controls.
 
 ### Fitting and horizon specifics
 
@@ -132,4 +142,4 @@ retaining mandatory baselines and never dropping hard series.
 These are research/backlog choices, not registry capabilities. Classical
 forecasters do not need an LLM; an LLM cannot select or invent official outputs.
 Future Azure ML AutoML demand uses **SDK v2 forecasting**, not regression.
-Azure/Fabric integrations remain opt-in and unvalidated in this slice.
+Azure/Fabric integrations remain opt-in and require separate live validation.

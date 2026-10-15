@@ -56,6 +56,10 @@ class DemandUncertaintyConfig(BaseModel):
 
     @model_validator(mode="after")
     def _three_temporal_blocks(self) -> DemandUncertaintyConfig:
+        if self.selection.ensemble_members is not None:
+            raise ValueError(
+                "Ensemble interval calibration is not supported by this bounded point-only increment."
+            )
         for validation, holdout in [
             (self.selection.validation, self.calibration),
             (self.calibration, self.selection.holdout),

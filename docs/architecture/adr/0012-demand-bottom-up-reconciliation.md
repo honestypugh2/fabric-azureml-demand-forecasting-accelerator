@@ -1,6 +1,6 @@
 # ADR 0012: Frozen-cohort bottom-up demand point reconciliation
 
-- Status: Accepted for bounded slice 7
+- Status: Accepted
 - Date: 2026-10-15
 
 ## Context
@@ -43,10 +43,11 @@ not an implicitly growing enterprise population. Upper-level accuracy may
 improve or deteriorate through aggregation; it never reselects the winner on
 holdout. Different levels are not pooled into one metric.
 
-Summing marginal interval bounds does not preserve coverage. This slice rejects
-interval inputs and makes no aggregate uncertainty claim. MinT, learned
-weights, grouped/temporal hierarchies, planned reparenting, adaptive uncertainty
-and cloud/application publication are out of scope.
+Summing marginal interval bounds does not preserve coverage. The bottom-up
+contract rejects interval inputs and makes no aggregate uncertainty claim.
+MinT, grouped/temporal hierarchies, planned reparenting, adaptive uncertainty
+and cloud/application publication are outside this contract. Ensemble weights
+are governed separately in [ADR 0014](0014-demand-out-of-sample-ensembles.md).
 
 Hierarchy outputs remain unapproved and do not inherit local model approval.
 Hashes and declared hierarchy availability are not authenticated metadata,

@@ -1,12 +1,13 @@
-# Domain rename map
+# Namespace migration and compatibility guide
 
-This is a migration specification, not a global replacement list. First-slice
-changes are additive: all existing revenue names continue to work.
+This is a technical migration specification, not a global replacement list.
+The installed namespace and existing revenue commands remain supported.
+Proposed names below are not compatibility aliases or installed entry points.
 
 | Class / surface | Current reference | Proposed target / action | Compatibility and validation |
 | --- | --- | --- | --- |
 | Repository | `fabric-azureml-demand-forecasting-accelerator` | Already correct; preserve remotes | Original revenue repository unchanged |
-| Distribution metadata | Demand project name with revenue description/keywords/authors | Neutral demand description and maintainers in phase 3 | Regenerate uv lock only with manifest changes |
+| Distribution metadata | Demand project name with revenue description/keywords/authors | Neutral demand description and maintainers | Regenerate uv lock only with manifest changes |
 | Public imports | `src/revenue_prediction/`, absolute imports in source/tests/scripts | `src/demand_forecasting/` | Inventory callers; wheel/import tests; aliases only for verified callers |
 | Public CLI | `revenue-prediction`, Typer revenue commands | `demand-forecasting` with demand-specific inputs | Preserve legacy during transition only if needed; entry-point tests |
 | Environment prefix | `RPA_`, `RPA_RUN_LIVE` | Proposed `DF_`, `DF_RUN_LIVE` | Document precedence/deprecation; reject contradictory settings |
@@ -31,14 +32,9 @@ changes are additive: all existing revenue names continue to work.
 | Generated artifacts | Data samples, outputs, MLflow, caches, frontend build | Regenerate only relevant synthetic/build outputs | Not source migration inputs; no hand-renaming models/data |
 | Tests | Revenue fixtures and behavior assertions | Keep legacy coverage; add demand tests | Preserve original behavior until explicit retirement decision |
 
-## Inventory evidence and sequencing
+## Compatibility and migration sequencing
 
-The initial scoped search found 510 matches in 125 files across source, tests,
-configuration, docs, cloud assets, frontend source and notebooks. This is a
-search result, not an exhaustive semantic reference count. Packaging,
-environment, Makefile, Docker and workflow surfaces were separately inspected.
-
-Before phase 3, refresh a full rename manifest from tracked files and symbol
+Before a namespace migration, create a full rename manifest from tracked files and symbol
 references. Migrate internal imports and packaging together, then configuration
 and deployment consumers, then API/UI and notebooks/docs. Run import, CLI,
 wheel, config, offline training and build tests at each boundary.
@@ -51,4 +47,4 @@ or dollar metrics with unit metrics. Those require semantic design decisions.
 Legacy revenue namespace/CLI aliases, revenue-specific labs/assets and duplicate
 IaC paths may eventually be retired in this demand repository once replacements
 and consumer migration are verified. Historical ADRs and attribution remain.
-Nothing in this first slice is moved or removed.
+Do not remove legacy interfaces without an explicit compatibility and retirement decision.

@@ -98,6 +98,7 @@ def test_capability_registry_is_time_series_not_revenue_regression() -> None:
         "ets",
         "arima",
         "sarima",
+        "weighted_ensemble",
     }
     assert all(item.frequencies == ("MS", "W-MON") for item in capabilities)
     assert all(

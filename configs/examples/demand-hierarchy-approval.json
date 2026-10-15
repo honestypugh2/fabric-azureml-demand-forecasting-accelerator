@@ -1,0 +1,19 @@
+{
+  "schema_version": "demand-local-policy-v3",
+  "principals": [
+    {"actor_id": "ACTOR-001", "roles": ["builder", "submitter"]},
+    {"actor_id": "ACTOR-002", "roles": ["reviewer"]}
+  ],
+  "max_holdout_primary_metric": 1.0,
+  "max_abs_holdout_bias_fraction": 0.2,
+  "require_seasonal_noninferiority": true,
+  "reconciliation": {
+    "maximum_absolute_coherence_residual": 1e-9,
+    "levels": [
+      {"hierarchy_level": "sku", "maximum_primary_metric": 1.0, "maximum_abs_bias_fraction": 0.2, "require_seasonal_noninferiority": true},
+      {"hierarchy_level": "product", "maximum_primary_metric": 1.0, "maximum_abs_bias_fraction": 0.2, "require_seasonal_noninferiority": true},
+      {"hierarchy_level": "family", "maximum_primary_metric": 1.0, "maximum_abs_bias_fraction": 0.2, "require_seasonal_noninferiority": true},
+      {"hierarchy_level": "brand", "maximum_primary_metric": 1.0, "maximum_abs_bias_fraction": 0.2, "require_seasonal_noninferiority": true}
+    ]
+  }
+}

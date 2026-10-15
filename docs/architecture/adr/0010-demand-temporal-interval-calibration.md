@@ -1,6 +1,6 @@
 # ADR 0010: Separate temporal residual calibration for demand intervals
 
-- Status: Accepted for the bounded offline slice-6 increment
+- Status: Accepted
 - Date: 2026-10-14
 
 ## Context
@@ -42,9 +42,10 @@ of exchangeable conformal coverage. Coverage must be assessed empirically, not
 guaranteed. Small synthetic calibration windows are illustrative only.
 
 Calibration records are experiment evidence, not approved model bundles.
-Interval-aware artifact hashing, model cards, production registration and
-approval gates require a future explicit schema/lifecycle change. Slice-5
-point artifacts and approvals are unchanged and do not authorize intervals.
+Interval-aware artifact hashing, model cards, registration and approval gates
+require an explicit schema/lifecycle boundary; see
+[ADR 0011](0011-demand-interval-artifacts-and-review.md).
+Point-only artifacts and approvals do not authorize intervals.
 The existing fingerprint scans all demand core modules: this additive source
 change intentionally requires repackaging and independent review of previously
 saved point bundles. No hash bypass or automatic migration is introduced.

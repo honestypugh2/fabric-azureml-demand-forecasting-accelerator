@@ -141,13 +141,11 @@ Still not included:
 
 Point-only v1 serialization and approval semantics remain available; v2 explicitly
 adds interval capability and review. The existing
-strict source fingerprint includes **all** demand core modules. Adding these
-interval modules therefore intentionally invalidates bundles built from the
-slice-5 source tree. Repackage and independently review a new artifact under
-the current source version, or use the matching slice-5 checkpoint for an old
-bundle. Do not edit saved hashes, bypass verification or reuse an old approval
+strict source fingerprint includes **all** demand core modules. A source change
+invalidates bundles built from a different implementation. Repackage and
+independently review a new artifact, or restore the exact source/runtime
+recorded by the old bundle. Do not edit saved hashes, bypass verification or reuse an old approval
 for a newly packaged artifact.
 
 See [ADR 0010](../architecture/adr/0010-demand-temporal-interval-calibration.md),
-[ADR 0011](../architecture/adr/0011-demand-interval-artifacts-and-review.md)
-and the [remaining gaps](../assessment/gap-analysis.md).
+[ADR 0011](../architecture/adr/0011-demand-interval-artifacts-and-review.md).

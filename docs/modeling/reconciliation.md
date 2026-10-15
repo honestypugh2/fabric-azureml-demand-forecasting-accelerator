@@ -1,4 +1,4 @@
-# Slice 7: bottom-up demand point reconciliation
+# Bottom-up demand point reconciliation and hierarchy-bound lifecycle
 
 This offline synthetic workflow creates coherent SKU -> product -> family ->
 brand point forecasts, preserving **channel and geography separately**.
@@ -34,9 +34,11 @@ instead; use generated Parquet to preserve datetime types and precision.
 Both example designs predeclare naive, seasonal naive and drift, rolling
 validation/holdout blocks, MASE selection and three forecast horizons. Monthly
 season length defaults to 12; weekly to 52 (a cycle, not ISO-year alignment).
-All registered point models can be declared in the existing selection config;
+All standalone point models can be declared in the existing selection config;
 optional statistical adapters still require the `forecasting` extra.
-This slice does not add tuning grids or a new model-selection algorithm.
+Opt-in [ensemble members](ensembles.md) use this same config;
+`weighted_ensemble` itself is not an input model ID for selection.
+This workflow does not add tuning grids.
 
 ## Frozen hierarchy version and availability
 
@@ -67,12 +69,13 @@ Effective-dated reparenting, historical hierarchy vintages and future planned
 classification changes are not implemented. `known_at` is a local declaration,
 not an authenticated metadata timestamp; externally supplied snapshots need
 appropriate governance. The historical actuals contract still requires stable
-hierarchy labels. Package is a SKU attribute, not an extra level in this slice.
+hierarchy labels. Package is a SKU attribute, not an extra hierarchy level.
 
 ## Reconciliation contract and coherence
 
 Bottom-up forecasts are deterministic sums of unchanged bottom-level
-`demand-point-v1` predictions. Each model and origin is reconciled separately.
+versioned demand point predictions (`demand-point-v1`, or v2 for weighted
+ensembles). Each model and origin is reconciled separately.
 Channels/geographies are never pooled, no new optimizer is run, and no
 independently fitted upper-level forecast is substituted.
 
@@ -147,19 +150,23 @@ not signatures or hashes of CSV file bytes. Parquet preserves exact records;
 CSV metrics are human-readable exports. JSON and CSV bytes and Parquet record
 values reproduce on a matching-source/runtime replay.
 
-These are **research reconciliation outputs**, not approved model artifacts,
-official forecasts, Fabric Gold tables or authenticated publication. Even
-reconciling previously approved-model points does not transfer approval to
-new hierarchy outputs. Existing model registry/card schemas are not changed
-to authorize parent forecasts. All rows remain unapproved.
+These standalone outputs are **research reconciliation evidence**, not approved
+model artifacts, official forecasts, Fabric Gold tables or authenticated
+publication. Arbitrarily reconciling approved-model points does not transfer
+approval. Hierarchy capability requires an explicit v3 packaging/review path:
+`demand-lifecycle package --include-hierarchy` recomputes and binds this
+snapshot/evidence, then requires hierarchy-specific level/node/horizon policy.
+`demand-lifecycle forecast --include-hierarchy` uses only that reviewed mapping
+and winner. All rows still remain unapproved.
+See [hierarchy lifecycle](../governance/demand-model-lifecycle.md) and
+[ADR 0013](../architecture/adr/0013-demand-hierarchy-lifecycle.md).
 
 The existing strict implementation fingerprint includes new demand modules.
 Saved point/interval bundles from an older source tree require their matching
 environment or new packaging and independent review; no hash bypass or
 automatic migration is introduced.
 
-MinT/top-down/middle-out methods, learned ensemble weights, aggregate
-uncertainty, grouped/temporal reconciliation, hierarchy-aware approval,
+MinT/top-down/middle-out methods, aggregate
+uncertainty, grouped/temporal reconciliation, authenticated production approval,
 effective-dated metadata, UI/API and cloud integration remain future work.
-See [ADR 0012](../architecture/adr/0012-demand-bottom-up-reconciliation.md)
-and the [gap analysis](../assessment/gap-analysis.md).
+See [ADR 0012](../architecture/adr/0012-demand-bottom-up-reconciliation.md).

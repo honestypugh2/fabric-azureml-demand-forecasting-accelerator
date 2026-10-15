@@ -24,7 +24,10 @@ def test_cli_registry_is_discoverable_json() -> None:
     response = runner.invoke(app, ["demand-models"])
     assert response.exit_code == 0
     capabilities = json.loads(response.output)
-    assert len(capabilities) == 13
+    assert len(capabilities) == 14
+    assert next(item for item in capabilities if item["model_id"] == "weighted_ensemble")[
+        "requires_validation_weights"
+    ]
     assert all(not item["supports_probabilistic_output"] for item in capabilities)
     assert {"ses", "holt_damped"}.issubset({item["model_id"] for item in capabilities})
 

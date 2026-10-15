@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from revenue_prediction.core.data.contracts import ContractViolation
+from revenue_prediction.core.data.demand_hierarchy import DemandHierarchy
 from revenue_prediction.core.data.io import read_dataset, write_dataset
 from revenue_prediction.core.evaluation.demand_selection import DemandSelectionConfig
 from revenue_prediction.core.evaluation.demand_tuning import DemandTuningConfig
@@ -83,9 +84,16 @@ def package(
     include_intervals: bool = typer.Option(
         False, "--include-intervals", help="Recompute an uncertainty experiment into a v2 bundle"
     ),
+    include_hierarchy: bool = typer.Option(
+        False,
+        "--include-hierarchy",
+        help="Recompute reconciliation evidence into a point-only v3 bundle",
+    ),
 ) -> None:
     """Recompute synthetic comparison evidence and serialize the fitted winner."""
     with _errors():
+        if include_intervals and include_hierarchy:
+            raise ValueError("Aggregate intervals are unsupported.")
         if output_dir.exists():
             raise FileExistsError(
                 "Artifact output directory exists; choose a new version directory."
@@ -119,6 +127,11 @@ def package(
             actor,
             tuning=tuning,
             uncertainty=uncertainty,
+            hierarchy=DemandHierarchy.model_validate_json(
+                (comparison_dir / "hierarchy.json").read_text(encoding="utf-8")
+            )
+            if include_hierarchy
+            else None,
         )
         output_dir.mkdir(parents=True, exist_ok=False)
         save_demand_bundle(bundle, output_dir / "model.json")
@@ -226,13 +239,20 @@ def forecast(
         "--include-intervals",
         help="Require a reviewed v2 artifact and export bound intervals",
     ),
+    include_hierarchy: bool = typer.Option(
+        False, "--include-hierarchy", help="Export bottom-up points using the reviewed hierarchy"
+    ),
 ) -> None:
     """Require a locally approved model; output forecasts still need separate approval."""
     with _errors():
         if output_dir.exists():
             raise FileExistsError("Inference output directory exists; choose a new directory.")
         predictions, manifest = predict_registered_demand(
-            registry, artifact_id, horizon, include_intervals=include_intervals
+            registry,
+            artifact_id,
+            horizon,
+            include_intervals=include_intervals,
+            include_hierarchy=include_hierarchy,
         )
         output_dir.mkdir(parents=True, exist_ok=False)
         write_dataset(predictions, output_dir / "predictions.parquet")

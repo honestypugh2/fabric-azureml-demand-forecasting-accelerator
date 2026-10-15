@@ -66,6 +66,9 @@ data/mltable/
 # Local-only demo / talk-track material (kept on the local branch, never committed)
 /demo-local/
 
+# Personal progress, session verification and documentation archives
+/.local-notes/
+
 # Generated static HTML docs site (build artifact; rebuild with `make docs-html`)
 /site/
 

@@ -148,7 +148,8 @@ actuals = generate_synthetic_demand_dataset(DemandDataConfig(n_skus=1,n_channels
 request = DemandForecastRequest(forecast_origin=actuals.date.iloc[48].date(),horizon=3)
 forecast = forecast_demand_models(actuals, request, models=('croston','sba','tsb'))
 assert len(forecast) == 9
-assert len(demand_model_capabilities()) == 13
+assert len(demand_model_capabilities()) == 14
+assert sum(not item.requires_validation_weights for item in demand_model_capabilities()) == 13
 from revenue_prediction.interfaces.cli.main import app
 from typer.testing import CliRunner
 assert CliRunner().invoke(app, ['demand-models']).exit_code == 0

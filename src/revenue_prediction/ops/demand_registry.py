@@ -25,6 +25,7 @@ from revenue_prediction.core.inference.demand_artifacts import (
     dataframe_records,
     demand_model_card,
     predict_demand_bundle,
+    predict_demand_hierarchy_bundle,
     predict_demand_interval_bundle,
     verify_demand_bundle,
 )
@@ -56,29 +57,65 @@ class IntervalApprovalPolicy(ArtifactRecord):
     minimum_calibration_predictions: int = Field(ge=1, strict=True)
 
 
+class HierarchyLevelPolicy(ArtifactRecord):
+    hierarchy_level: Literal["sku", "product", "family", "brand"]
+    maximum_primary_metric: float = Field(ge=0)
+    maximum_abs_bias_fraction: float = Field(ge=0)
+    require_seasonal_noninferiority: bool = True
+
+
+class HierarchyApprovalPolicy(ArtifactRecord):
+    levels: tuple[HierarchyLevelPolicy, ...] = Field(min_length=4, max_length=4)
+    maximum_absolute_coherence_residual: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _all_levels(self) -> HierarchyApprovalPolicy:
+        if {item.hierarchy_level for item in self.levels} != {"sku", "product", "family", "brand"}:
+            raise ValueError("Hierarchy policy must explicitly cover all four levels.")
+        return self
+
+
+class EnsembleApprovalPolicy(ArtifactRecord):
+    method: Literal["inverse_validation_error"] = "inverse_validation_error"
+    maximum_component_weight: float = Field(gt=0, le=1)
+    minimum_validation_origins: int = Field(ge=1, strict=True)
+
+
 class LocalApprovalPolicy(ArtifactRecord):
     """Explicit illustrative acceptance limits, fixed when a registry is created."""
 
-    schema_version: Literal["demand-local-policy-v1", "demand-local-policy-v2"] = (
-        "demand-local-policy-v1"
-    )
+    schema_version: Literal[
+        "demand-local-policy-v1", "demand-local-policy-v2", "demand-local-policy-v3"
+    ] = "demand-local-policy-v1"
     principals: tuple[LocalPrincipal, ...] = Field(min_length=2)
     max_holdout_primary_metric: float = Field(ge=0)
     max_abs_holdout_bias_fraction: float = Field(ge=0)
     require_seasonal_noninferiority: bool = True
     intervals: IntervalApprovalPolicy | None = None
+    reconciliation: HierarchyApprovalPolicy | None = None
+    ensemble: EnsembleApprovalPolicy | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         result = handler(self)
         if self.intervals is None:
             result.pop("intervals", None)
+        if self.reconciliation is None:
+            result.pop("reconciliation", None)
+        if self.ensemble is None:
+            result.pop("ensemble", None)
         return result
 
     @model_validator(mode="after")
     def _separation_possible(self) -> LocalApprovalPolicy:
         if (self.schema_version == "demand-local-policy-v2") != (self.intervals is not None):
             raise ValueError("Only demand-local-policy-v2 must contain interval thresholds.")
+        if (self.schema_version == "demand-local-policy-v3") != (
+            self.reconciliation is not None or self.ensemble is not None
+        ):
+            raise ValueError(
+                "Only demand-local-policy-v3 must contain hierarchy or ensemble thresholds."
+            )
         actors = [item.actor_id for item in self.principals]
         if len(set(actors)) != len(actors):
             raise ValueError("Policy actor IDs must be unique.")
@@ -199,6 +236,18 @@ def _require_role(policy: LocalApprovalPolicy, actor_id: str, role: Role) -> Non
 
 def _approval_gates(bundle: DemandModelBundle, policy: LocalApprovalPolicy) -> None:
     payload = bundle.payload
+    if (payload.experiment.ensemble_members is None) != (policy.ensemble is None):
+        raise ContractViolation(
+            "Approval blocked: ensemble evidence requires matching explicit ensemble policy."
+        )
+    if policy.ensemble is not None and (
+        payload.experiment.validation.n_origins < policy.ensemble.minimum_validation_origins
+        or any(
+            row.weight > policy.ensemble.maximum_component_weight
+            for row in payload.decision.ensemble_weights
+        )
+    ):
+        raise ContractViolation("Approval blocked: ensemble weight/origin limits exceed policy.")
     metric = payload.experiment.primary_metric
     selected = {
         row.horizon: row
@@ -226,6 +275,62 @@ def _approval_gates(bundle: DemandModelBundle, policy: LocalApprovalPolicy) -> N
             raise ContractViolation(
                 f"Approval blocked: holdout {metric} at horizon {horizon} degrades seasonal naive."
             )
+    hierarchy = payload.reconciliation
+    hierarchy_limits = policy.reconciliation
+    if (hierarchy is None) != (hierarchy_limits is None):
+        raise ContractViolation(
+            "Approval blocked: hierarchy artifact requires matching explicit hierarchy policy."
+        )
+    if hierarchy is not None and hierarchy_limits is not None:
+        if (
+            hierarchy.holdout.maximum_absolute_residual
+            > hierarchy_limits.maximum_absolute_coherence_residual
+        ):
+            raise ContractViolation(
+                "Approval blocked: hierarchy coherence residual exceeds policy."
+            )
+        for rows in (hierarchy.holdout.metrics, hierarchy.holdout.node_metrics):
+            references = {
+                (
+                    row.hierarchy_level,
+                    getattr(row, "node_id", None),
+                    getattr(row, "channel_id", None),
+                    getattr(row, "geography_id", None),
+                    row.horizon,
+                ): row
+                for row in rows
+                if row.model_id == "seasonal_naive"
+            }
+            for row in rows:
+                if row.model_id != payload.decision.selected_model:
+                    continue
+                limits = next(
+                    item
+                    for item in hierarchy_limits.levels
+                    if item.hierarchy_level == row.hierarchy_level
+                )
+                value = getattr(row, metric)
+                key = (
+                    row.hierarchy_level,
+                    getattr(row, "node_id", None),
+                    getattr(row, "channel_id", None),
+                    getattr(row, "geography_id", None),
+                    row.horizon,
+                )
+                reference = getattr(references[key], metric)
+                if (
+                    value is None
+                    or value > limits.maximum_primary_metric
+                    or row.bias_fraction is None
+                    or abs(row.bias_fraction) > limits.maximum_abs_bias_fraction
+                    or (
+                        limits.require_seasonal_noninferiority
+                        and (reference is None or value > reference)
+                    )
+                ):
+                    raise ContractViolation(
+                        f"Approval blocked: hierarchy metric/bias at {key} is undefined or exceeds policy."
+                    )
     evidence = payload.uncertainty
     limits = policy.intervals
     if evidence is None:
@@ -453,12 +558,17 @@ def predict_registered_demand(
     horizon: int | None = None,
     *,
     include_intervals: bool = False,
+    include_hierarchy: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Require approved model at a transactionally consistent audit revision.
 
     The resulting point forecasts remain unapproved. The sidecar records the
     approval snapshot, not ongoing authorization or an official forecast.
     """
+    if include_intervals and include_hierarchy:
+        raise ContractViolation(
+            "Aggregate intervals are unsupported; choose point hierarchy or leaf intervals."
+        )
     with _registry(path) as connection:
         record = _read_record(connection, artifact_id)
         if record.status != "approved":
@@ -466,7 +576,9 @@ def predict_registered_demand(
                 f"Model is {record.status}; approved-model inference is blocked."
             )
         forecast = (
-            predict_demand_interval_bundle(record.bundle, horizon)
+            predict_demand_hierarchy_bundle(record.bundle, horizon)
+            if include_hierarchy
+            else predict_demand_interval_bundle(record.bundle, horizon)
             if include_intervals
             else predict_demand_bundle(record.bundle, horizon)
         )
@@ -493,6 +605,34 @@ def predict_registered_demand(
                     "uncertainty_experiment_sha256": evidence.experiment_sha256,
                     "nominal_coverage": evidence.calibration.nominal_coverage,
                     "calibration_as_of": evidence.calibration.calibration_as_of.isoformat(),
+                }
+            )
+        if include_hierarchy:
+            evidence = record.bundle.payload.reconciliation
+            if evidence is None:
+                raise ContractViolation("Hierarchy inference requires bound hierarchy evidence.")
+            manifest.update(
+                {
+                    "schema_version": "demand-inference-lineage-v3",
+                    "hierarchy_id": evidence.hierarchy.hierarchy_id,
+                    "hierarchy_known_at": evidence.hierarchy.payload.known_at.isoformat(),
+                    "reconciliation_method": evidence.method,
+                    "hierarchy_evidence_sha256": content_digest(evidence.model_dump(mode="json")),
+                    "aggregate_intervals": "unsupported",
+                }
+            )
+        if record.bundle.payload.experiment.ensemble_members is not None:
+            manifest.update(
+                {
+                    "schema_version": "demand-inference-lineage-v3",
+                    "ensemble_method": "inverse_validation_error",
+                    "ensemble_weights_sha256": content_digest(
+                        [
+                            item.model_dump(mode="json")
+                            for item in record.bundle.payload.decision.ensemble_weights
+                        ]
+                    ),
+                    "selected_model": record.bundle.payload.decision.selected_model,
                 }
             )
         return forecast, manifest

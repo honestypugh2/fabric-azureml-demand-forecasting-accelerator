@@ -255,6 +255,7 @@ def demand_models() -> None:
     console.print(
         json.dumps([asdict(item) for item in demand_model_capabilities()], indent=2),
         markup=False,
+        soft_wrap=True,
     )
 
 
@@ -445,6 +446,11 @@ def compare_demand(
     tuning_grid: Path | None = typer.Option(
         None, "--tuning-grid", help="JSON array of predeclared TimeSeriesModelConfig objects"
     ),
+    ensemble_members: str | None = typer.Option(
+        None,
+        "--ensemble-members",
+        help="Predeclared comma-separated comparison IDs; learn global inverse-validation-error weights",
+    ),
     demand_pattern: str = typer.Option(
         "regular", "--pattern", help="regular, intermittent, long_zero_runs or obsolescence"
     ),
@@ -538,6 +544,9 @@ def compare_demand(
                 "minimum_relative_improvement": minimum_improvement,
                 "max_abs_bias_fraction": max_abs_bias,
                 "max_horizon_relative_degradation": max_horizon_degradation,
+                "ensemble_members": tuple(item.strip() for item in ensemble_members.split(","))
+                if ensemble_members is not None
+                else None,
             }
         )
         tuned = None

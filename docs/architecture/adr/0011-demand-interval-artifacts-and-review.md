@@ -1,12 +1,12 @@
 # ADR 0011: Bind temporal calibration to independently reviewed demand artifacts
 
-- Status: Accepted for the offline slice-6 lifecycle follow-up
+- Status: Accepted
 - Date: 2026-10-15
 
 ## Context
 
-The first slice-6 increment persisted residual calibration separately from
-point-model artifacts. Pairing arbitrary calibration with model inference
+Standalone residual calibration is separate from point-model artifacts.
+Pairing arbitrary calibration with model inference
 could change model parameters, cohort or training policy without explicit
 review. Point-only model approval must not silently authorize uncertainty.
 

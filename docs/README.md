@@ -20,12 +20,7 @@ future work.
 
 | Topic | Read |
 | --- | --- |
-| Inventory, lineage and baseline results | [assessment/current-state.md](assessment/current-state.md) |
-| Gaps and data-discovery questions | [assessment/gap-analysis.md](assessment/gap-analysis.md) |
-| Scored inheritance/donor comparison | [assessment/reuse-decision.md](assessment/reuse-decision.md) |
-| Incremental phases and architecture boundaries | [assessment/migration-map.md](assessment/migration-map.md) |
-| Requirements and implementation status | [assessment/customer-requirements-traceability.md](assessment/customer-requirements-traceability.md) |
-| Coordinated rename specification | [assessment/domain-rename-map.md](assessment/domain-rename-map.md) |
+| Namespace migration and compatibility | [architecture/domain-rename-map.md](architecture/domain-rename-map.md) |
 | Repository inheritance decision | [ADR 0005](architecture/adr/0005-demand-repository-inheritance.md) |
 | Proposed package structure | [architecture/demand-target-structure.md](architecture/demand-target-structure.md) |
 | Runnable demand example, dictionary and availability | [data/synthetic-generator.md](data/synthetic-generator.md) |
@@ -44,6 +39,9 @@ future work.
 | Bound interval artifacts, review policy and inference lineage | [ADR 0011](architecture/adr/0011-demand-interval-artifacts-and-review.md) |
 | Frozen hierarchies, bottom-up point forecasts and per-level metrics | [modeling/reconciliation.md](modeling/reconciliation.md) |
 | Reconciliation scope and aggregate uncertainty boundary | [ADR 0012](architecture/adr/0012-demand-bottom-up-reconciliation.md) |
+| Hierarchy-bound artifacts, review and inference | [ADR 0013](architecture/adr/0013-demand-hierarchy-lifecycle.md) |
+| Out-of-sample weighted ensembles and explicit failure rules | [modeling/ensembles.md](modeling/ensembles.md) |
+| Transparent inverse-validation-error weighting decision | [ADR 0014](architecture/adr/0014-demand-out-of-sample-ensembles.md) |
 
 ### Inherited revenue documentation
 

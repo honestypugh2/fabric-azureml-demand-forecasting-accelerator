@@ -1,8 +1,9 @@
 # Validation-only tuning and demand diagnostics
 
-This offline slice extends **time-series forecasting**, not the inherited
-revenue regression factory. There are thirteen registry IDs: the original
-seven, Croston/SBA/TSB, and optional ETS/ARIMA/SARIMA. No model is automatically
+This offline workflow uses **time-series forecasting**, not the inherited
+revenue regression factory. Parameter tuning covers thirteen standalone
+algorithms: seven baselines/smoothers, Croston/SBA/TSB, and optional
+ETS/ARIMA/SARIMA. No model is automatically
 approved, and no complexity-based preference is imposed.
 
 ## Runnable synthetic demonstrations

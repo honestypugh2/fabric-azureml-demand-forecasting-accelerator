@@ -25,7 +25,7 @@ strategy. ADR 0003 remains valid only for that preserved revenue workflow.
    additive damped Holt. These are original deterministic NumPy implementations,
    not a borrowed donor model or a fitted tabular regressor.
 4. Predeclare SES/Holt smoothing coefficients and moving-average windows.
-   Fit levels/trends on training history only. This slice does not optimize
+   Fit levels/trends on training history only. These fixed-coefficient models do not optimize
    likelihood, auto-select an ETS error/trend/seasonal configuration or tune
    parameters using validation/holdout results.
 5. Enforce history eligibility: contiguous available calendar history for
@@ -68,14 +68,14 @@ There is no universal winning algorithm or universal accuracy threshold.
 Seasonality/trend, intermittency, length, structural changes, covariate
 availability, horizon and cost determine candidate eligibility and gates.
 
-ETS/Holt-Winters, ARIMA/SARIMA/SARIMAX, intermittent-demand algorithms,
-probabilistic output, learned global models, LSTM and foundation models remain
-future adapters. LSTM is not the default. Registry metadata truthfully marks
-current models as local, univariate, point-only and without covariates or
-reconciliation; no live Azure execution is claimed.
+Additional statistical, intermittent-demand, probabilistic or learned global
+adapters must preserve this forecasting protocol. LSTM is not the default.
+Registry metadata must truthfully identify each model's execution, covariate,
+probabilistic and reconciliation capabilities; local support does not establish
+live Azure execution.
 
 Azure ML AutoML demand must use the forecasting task, not the inherited
-regression job. No cloud task is implemented or submitted in this slice.
+regression job. A local comparison does not submit or validate a cloud task.
 
 ## Evidence and references
 
