@@ -3,6 +3,56 @@
 Assessed 2026-10-13 on branch `feat/demand-forecasting-foundation`. This is a
 first-slice assessment, not a production-readiness certification.
 
+## Slice-6 interval lifecycle follow-up (2026-10-15)
+
+The bounded interval increment was committed/pushed independently as `52cd073`.
+The follow-up now binds recomputed temporal calibration to a fitted model in
+`demand-bundle-v2`, includes portfolio/series/horizon uncertainty evidence in
+`demand-model-card-v2`, requires an explicit `demand-local-policy-v2`, and
+exports approved-model intervals with `demand-inference-lineage-v2`.
+Point-only v1 serialization/commands remain available. Source fingerprints
+still require repackaging/review after a demand-source change.
+
+Executed verification:
+
+- Final `make check`: Ruff/Pyright passed; **453 passed, 2 live tests skipped**,
+  with nine inherited MLflow/Pydantic warnings.
+- **37 new focused tests** passed: monthly/weekly artifact and CLI lifecycles,
+  complete calibration/metric scope, tampering/mismatches, explicit policy
+  compatibility, sample/coverage/width/score/pinball gates, rollback, interval
+  export/revocation, selected ETS restoration without optimization and original
+  model restoration in a fresh process with statsmodels imports blocked.
+- New-test Pyright and modified-source Pylance syntax passed. Pylance reported
+  all resolved callers compatible with the extended builder/inference signatures.
+- `make data && make train` passed; inherited gradient boosting remained champion.
+- Built a wheel, imported its extracted package in a fresh process and loaded
+  a source-created interval artifact. Its forecast digest reproduced exactly.
+  The temporary extraction directory was automatically cleaned.
+
+Persisted demonstrations use the **unchanged example interval policy**:
+
+- `outputs/demand-slice-6-lifecycle-artifact` selected seasonal naive. Portfolio
+  coverage was approximately 84.72% at nominal 80%, but some series/horizon
+  coverage failed the minimum 50% gate. Approval rolled back with revision 2
+  unchanged; inference stayed blocked. The artifact was then explicitly rejected.
+- A **separate deterministic linear synthetic fixture**, retaining all 12
+  series, exercised success without changing that policy or retuning/shrinking
+  the rejected experiment. It selected drift, produced 100% coverage on that
+  fixture and exported 24 frozen-origin interval rows with verified exact
+  replay and bound lineage. The artifact was then revoked; subsequent inference
+  was blocked. Its files are in
+  `outputs/demand-slice-6-lifecycle-positive-artifact` and
+  `outputs/demand-slice-6-lifecycle-positive-inference`.
+- Both final states are retained in `outputs/demand-slice-6-lifecycle.sqlite`.
+  These synthetic outcomes are test fixtures, not customer acceptance evidence.
+
+The local registry still does not authenticate actors or approve official
+forecasts. Learned quantiles, multilevel/adaptive calibration, reconciliation,
+ensembles, production identity, cloud integration and application publication
+remain follow-up work. See the
+[lifecycle guide](../governance/demand-model-lifecycle.md#interval-artifacts-and-local-approval)
+and [ADR 0011](../architecture/adr/0011-demand-interval-artifacts-and-review.md).
+
 ## Bounded slice-6 interval increment (2026-10-14)
 
 Slice 5 was committed and pushed independently as `63837ff` before this work.

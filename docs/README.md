@@ -41,6 +41,7 @@ future work.
 | Artifact and approval trust boundaries | [ADR 0009](architecture/adr/0009-demand-artifacts-and-local-governance.md) |
 | Offline intervals, temporal calibration and uncertainty metrics | [modeling/uncertainty.md](modeling/uncertainty.md) |
 | Interval calibration scope and limitations | [ADR 0010](architecture/adr/0010-demand-temporal-interval-calibration.md) |
+| Bound interval artifacts, review policy and inference lineage | [ADR 0011](architecture/adr/0011-demand-interval-artifacts-and-review.md) |
 
 ### Inherited revenue documentation
 

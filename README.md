@@ -1,7 +1,7 @@
 # Fabric + Azure ML Demand Forecasting Accelerator
 
-**Migration status: offline forecasting, tuning, point artifacts/local model governance,
-and separately evaluated prediction intervals.** This repository inherits the
+**Migration status: offline forecasting, tuning, point/interval artifacts and local
+model governance.** This repository inherits the
 separate revenue-prediction accelerator. The existing CLI, training, API and
 educational UI still implement that revenue workflow; they have not yet been
 converted into a complete demand-forecasting application.

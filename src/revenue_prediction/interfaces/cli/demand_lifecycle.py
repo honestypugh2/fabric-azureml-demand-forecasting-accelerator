@@ -17,6 +17,7 @@ from revenue_prediction.core.data.contracts import ContractViolation
 from revenue_prediction.core.data.io import read_dataset, write_dataset
 from revenue_prediction.core.evaluation.demand_selection import DemandSelectionConfig
 from revenue_prediction.core.evaluation.demand_tuning import DemandTuningConfig
+from revenue_prediction.core.evaluation.demand_uncertainty import DemandUncertaintyConfig
 from revenue_prediction.core.inference.demand_artifacts import (
     build_demand_bundle,
     canonical_json,
@@ -61,7 +62,7 @@ def _print_record(record: RegistryRecord) -> None:
                 "revision": record.revision,
                 "event_sha256": record.event_sha256,
                 "events": [event.model_dump(mode="json") for event in record.events],
-                "scope": "local-model-only; point forecasts remain unapproved",
+                "scope": "local-model-only; forecasts remain unapproved",
             }
         ),
         markup=False,
@@ -79,6 +80,9 @@ def package(
     ),
     actor: str = typer.Option(..., "--actor", help="Neutral local actor ID, e.g. ACTOR-001"),
     output_dir: Path = typer.Option(..., "--out", help="New artifact directory; never overwrite"),
+    include_intervals: bool = typer.Option(
+        False, "--include-intervals", help="Recompute an uncertainty experiment into a v2 bundle"
+    ),
 ) -> None:
     """Recompute synthetic comparison evidence and serialize the fitted winner."""
     with _errors():
@@ -86,8 +90,21 @@ def package(
             raise FileExistsError(
                 "Artifact output directory exists; choose a new version directory."
             )
-        experiment = DemandSelectionConfig.model_validate_json(
-            (comparison_dir / "experiment_config.json").read_text(encoding="utf-8")
+        uncertainty = (
+            DemandUncertaintyConfig.model_validate_json(
+                (comparison_dir / "uncertainty_config.json").read_text(encoding="utf-8")
+            )
+            if include_intervals
+            else None
+        )
+        experiment = (
+            uncertainty.selection
+            if uncertainty is not None
+            else (
+                DemandSelectionConfig.model_validate_json(
+                    (comparison_dir / "experiment_config.json").read_text(encoding="utf-8")
+                )
+            )
         )
         tuning_path = comparison_dir / "tuning_config.json"
         tuning = (
@@ -101,6 +118,7 @@ def package(
             date.fromisoformat(origin),
             actor,
             tuning=tuning,
+            uncertainty=uncertainty,
         )
         output_dir.mkdir(parents=True, exist_ok=False)
         save_demand_bundle(bundle, output_dir / "model.json")
@@ -203,12 +221,19 @@ def forecast(
     artifact_id: str = typer.Option(..., "--artifact-id"),
     horizon: int | None = typer.Option(None, "--horizon", min=1),
     output_dir: Path = typer.Option(..., "--out", help="New inference directory; never overwrite"),
+    include_intervals: bool = typer.Option(
+        False,
+        "--include-intervals",
+        help="Require a reviewed v2 artifact and export bound intervals",
+    ),
 ) -> None:
     """Require a locally approved model; output forecasts still need separate approval."""
     with _errors():
         if output_dir.exists():
             raise FileExistsError("Inference output directory exists; choose a new directory.")
-        predictions, manifest = predict_registered_demand(registry, artifact_id, horizon)
+        predictions, manifest = predict_registered_demand(
+            registry, artifact_id, horizon, include_intervals=include_intervals
+        )
         output_dir.mkdir(parents=True, exist_ok=False)
         write_dataset(predictions, output_dir / "predictions.parquet")
         (output_dir / "lineage.json").write_text(canonical_json(manifest) + "\n", encoding="utf-8")

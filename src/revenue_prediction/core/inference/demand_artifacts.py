@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from revenue_prediction.core.data.contracts import ContractViolation
 from revenue_prediction.core.data.demand_forecast import (
@@ -30,6 +37,12 @@ from revenue_prediction.core.evaluation.demand_selection import (
     run_demand_selection,
 )
 from revenue_prediction.core.evaluation.demand_tuning import DemandTuningConfig, run_demand_tuning
+from revenue_prediction.core.evaluation.demand_uncertainty import (
+    DemandIntervalCalibration,
+    DemandUncertaintyConfig,
+    apply_demand_intervals,
+    run_demand_uncertainty,
+)
 from revenue_prediction.core.features.demand import DemandFeatureConfig, available_demand_history
 from revenue_prediction.core.models.demand_forecasters import (
     DemandForecasterState,
@@ -134,8 +147,57 @@ class DemandLineage(ArtifactRecord):
     runtime: dict[str, str]
 
 
+class IntervalEvaluationMetric(ArtifactRecord):
+    model_id: str
+    nominal_coverage: float = Field(gt=0, lt=1)
+    horizon: int = Field(ge=0, strict=True)
+    n_predictions: int = Field(gt=0, strict=True)
+    empirical_coverage: float = Field(ge=0, le=1)
+    mean_interval_width: float = Field(ge=0)
+    mean_interval_score: float = Field(ge=0)
+    lower_pinball_loss: float = Field(ge=0)
+    upper_pinball_loss: float = Field(ge=0)
+    coverage_gap: float
+    lower_quantile_level: float = Field(gt=0, lt=1)
+    upper_quantile_level: float = Field(gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def _metric_identity(self) -> IntervalEvaluationMetric:
+        alpha = 1 - self.nominal_coverage
+        if (
+            self.coverage_gap != self.empirical_coverage - self.nominal_coverage
+            or self.lower_quantile_level != alpha / 2
+            or self.upper_quantile_level != 1 - alpha / 2
+        ):
+            raise ValueError("Interval metric coverage/tail levels differ from nominal coverage.")
+        return self
+
+
+class SeriesIntervalEvaluationMetric(IntervalEvaluationMetric):
+    sku_id: str
+    channel_id: str
+    geography_id: str
+
+    @property
+    def series_key(self) -> tuple[str, str, str]:
+        return DemandSeriesKey(
+            sku_id=self.sku_id, channel_id=self.channel_id, geography_id=self.geography_id
+        ).key
+
+
+class DemandIntervalEvidence(ArtifactRecord):
+    experiment: DemandUncertaintyConfig
+    calibration: DemandIntervalCalibration
+    calibration_predictions_sha256: Digest
+    holdout_intervals_sha256: Digest
+    calibration_sha256: Digest
+    experiment_sha256: Digest
+    holdout_metrics: tuple[IntervalEvaluationMetric, ...] = Field(min_length=1)
+    series_holdout_metrics: tuple[SeriesIntervalEvaluationMetric, ...] = Field(min_length=1)
+
+
 class DemandBundlePayload(ArtifactRecord):
-    schema_version: Literal["demand-bundle-v1"] = "demand-bundle-v1"
+    schema_version: Literal["demand-bundle-v1", "demand-bundle-v2"] = "demand-bundle-v1"
     created_at: datetime
     created_by: ActorId
     origin: date
@@ -149,6 +211,14 @@ class DemandBundlePayload(ArtifactRecord):
     series: tuple[SeriesArtifact, ...] = Field(min_length=1)
     validation_metrics: tuple[EvaluationMetric, ...] = Field(min_length=1)
     holdout_metrics: tuple[EvaluationMetric, ...] = Field(min_length=1)
+    uncertainty: DemandIntervalEvidence | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = handler(self)
+        if self.uncertainty is None:
+            result.pop("uncertainty", None)
+        return result
 
     @model_validator(mode="after")
     def _consistent_bundle(self) -> DemandBundlePayload:
@@ -159,7 +229,15 @@ class DemandBundlePayload(ArtifactRecord):
             raise ValueError("Artifact creation timestamp must be UTC-aware.")
         if self.origin < self.experiment.holdout.evaluation_as_of:
             raise ValueError("Artifact origin must follow all evaluation evidence availability.")
-        if self.decision.selected_at != self.experiment.holdout.first_origin:
+        uncertainty = self.uncertainty
+        if (self.schema_version == "demand-bundle-v2") != (uncertainty is not None):
+            raise ValueError("Only demand-bundle-v2 must contain interval evidence.")
+        selected_at = (
+            uncertainty.experiment.calibration.first_origin
+            if uncertainty is not None
+            else self.experiment.holdout.first_origin
+        )
+        if self.decision.selected_at != selected_at:
             raise ValueError("Selection timestamp differs from experiment.")
         if (
             self.frequency != self.experiment.validation.frequency
@@ -272,7 +350,81 @@ class DemandBundlePayload(ArtifactRecord):
             != self.decision.seasonal_naive_metric
         ):
             raise ValueError("Selection scores differ from recorded validation evidence.")
+        if uncertainty is not None:
+            self._validate_uncertainty(uncertainty)
         return self
+
+    def _validate_uncertainty(self, evidence: DemandIntervalEvidence) -> None:
+        config, calibration = evidence.experiment, evidence.calibration
+        if (
+            config.selection != self.experiment
+            or calibration.frequency != self.frequency
+            or calibration.nominal_coverage != config.nominal_coverage
+            or calibration.calibration_as_of != config.calibration.evaluation_as_of
+            or content_digest(calibration.model_dump(mode="json")) != evidence.calibration_sha256
+            or content_digest(config.model_dump(mode="json")) != evidence.experiment_sha256
+            or self.lineage.tuning_config_sha256 is not None
+            or self.lineage.tuning_trials_sha256 is not None
+        ):
+            raise ValueError("Interval experiment/calibration lineage differs from point artifact.")
+        models = {"naive", "seasonal_naive", self.decision.selected_model}
+        keys = {item.series.key for item in self.series}
+        expected_cells = {
+            (model, *key, horizon)
+            for model in models
+            for key in keys
+            for horizon in range(1, self.maximum_horizon + 1)
+        }
+        if {cell.key for cell in calibration.cells} != expected_cells or any(
+            cell.n_predictions != config.calibration.n_origins for cell in calibration.cells
+        ):
+            raise ValueError(
+                "Calibration differs from the complete evaluated model/cohort/horizon scope."
+            )
+        last_origin = pd.Timestamp(config.calibration.first_origin) + (
+            (config.calibration.n_origins - 1)
+            * config.calibration.step_periods
+            * demand_period_offset(self.frequency)
+        )
+        last_target = (
+            DemandForecastRequest(
+                forecast_origin=last_origin.date(),
+                frequency=self.frequency,
+                horizon=self.maximum_horizon,
+            )
+            .forecast_dates[-1]
+            .date()
+        )
+        if calibration.last_target_date != last_target:
+            raise ValueError("Calibration final target differs from experiment.")
+        for rows, per_series in [
+            (evidence.holdout_metrics, False),
+            (evidence.series_holdout_metrics, True),
+        ]:
+            expected = {
+                (model, horizon, key)
+                for model in models
+                for horizon in range(self.maximum_horizon + 1)
+                for key in (keys if per_series else {None})
+            }
+            observed = {
+                (
+                    row.model_id,
+                    row.horizon,
+                    row.series_key if isinstance(row, SeriesIntervalEvaluationMetric) else None,
+                )
+                for row in rows
+            }
+            if observed != expected or len(rows) != len(expected):
+                raise ValueError("Interval metrics must cover the complete evaluated scope.")
+            for row in rows:
+                count = (
+                    config.selection.holdout.n_origins
+                    * (self.maximum_horizon if row.horizon == 0 else 1)
+                    * (1 if per_series else len(keys))
+                )
+                if row.n_predictions != count or row.nominal_coverage != config.nominal_coverage:
+                    raise ValueError("Interval metric counts/coverage differ from experiment.")
 
 
 class DemandModelBundle(ArtifactRecord):
@@ -292,6 +444,8 @@ def build_demand_bundle(
     origin: date,
     created_by: str,
     tuning: DemandTuningConfig | None = None,
+    *,
+    uncertainty: DemandUncertaintyConfig | None = None,
 ) -> DemandModelBundle:
     """Recompute evidence, freeze selected coefficients and bind all lineage hashes.
 
@@ -300,10 +454,23 @@ def build_demand_bundle(
     """
     if origin < experiment.holdout.evaluation_as_of:
         raise ContractViolation("Bundle origin must be on/after holdout evaluation_as_of.")
+    if uncertainty is not None and (uncertainty.selection != experiment or tuning is not None):
+        raise ContractViolation(
+            "Interval packaging requires the matching selection and no tuning grid."
+        )
+    interval_result = (
+        run_demand_uncertainty(actuals, uncertainty) if uncertainty is not None else None
+    )
     tuned = run_demand_tuning(actuals, tuning) if tuning is not None else None
     if tuned is not None and tuned.frozen_config != experiment:
         raise ContractViolation("Tuning evidence does not reproduce the frozen experiment.")
-    result = tuned.selection if tuned is not None else run_demand_selection(actuals, experiment)
+    result = (
+        interval_result
+        if interval_result is not None
+        else tuned.selection
+        if tuned is not None
+        else run_demand_selection(actuals, experiment)
+    )
     scope = tuple(
         DemandSeriesKey(**dict(zip(DEMAND_SERIES_COLUMNS, key, strict=True)))
         for key in result.validation.predictions[DEMAND_SERIES_COLUMNS]
@@ -366,6 +533,7 @@ def build_demand_bundle(
     )
     columns = list(EvaluationMetric.model_fields)
     payload = DemandBundlePayload(
+        schema_version="demand-bundle-v2" if interval_result is not None else "demand-bundle-v1",
         created_at=datetime.now(UTC),
         created_by=created_by,
         origin=origin,
@@ -383,6 +551,26 @@ def build_demand_bundle(
             EvaluationMetric.model_validate(row)
             for row in dataframe_records(result.holdout.metrics[columns])
         ),
+        uncertainty=DemandIntervalEvidence(
+            experiment=uncertainty,
+            calibration=interval_result.calibration,
+            calibration_predictions_sha256=content_digest(
+                dataframe_records(interval_result.calibration_backtest.predictions)
+            ),
+            holdout_intervals_sha256=content_digest(dataframe_records(interval_result.predictions)),
+            calibration_sha256=content_digest(interval_result.calibration.model_dump(mode="json")),
+            experiment_sha256=content_digest(uncertainty.model_dump(mode="json")),
+            holdout_metrics=tuple(
+                IntervalEvaluationMetric.model_validate(row)
+                for row in dataframe_records(interval_result.metrics)
+            ),
+            series_holdout_metrics=tuple(
+                SeriesIntervalEvaluationMetric.model_validate(row)
+                for row in dataframe_records(interval_result.series_metrics)
+            ),
+        )
+        if interval_result is not None and uncertainty is not None
+        else None,
     )
     return DemandModelBundle(
         artifact_id=content_digest(payload.model_dump(mode="json")), payload=payload
@@ -424,7 +612,7 @@ def predict_demand_bundle(bundle: DemandModelBundle, horizon: int | None = None)
     verify_demand_bundle(bundle)
     payload = bundle.payload
     horizon = payload.maximum_horizon if horizon is None else horizon
-    if not 1 <= horizon <= payload.maximum_horizon:
+    if type(horizon) is not int or not 1 <= horizon <= payload.maximum_horizon:
         raise ContractViolation(
             "Forecast horizon must stay within the artifact's evaluated horizon."
         )
@@ -491,6 +679,29 @@ def predict_demand_bundle(bundle: DemandModelBundle, horizon: int | None = None)
     return validate_demand_forecasts(frame, request)
 
 
+def predict_demand_interval_bundle(
+    bundle: DemandModelBundle, horizon: int | None = None
+) -> pd.DataFrame:
+    """Restore the selected model and only its bound calibration cells; never refit."""
+    points = predict_demand_bundle(bundle, horizon)
+    evidence = bundle.payload.uncertainty
+    if evidence is None:
+        raise ContractViolation("Point-only artifact has no approved interval capability.")
+    maximum = int(points["horizon"].max())
+    calibration = DemandIntervalCalibration.model_validate(
+        {
+            **evidence.calibration.model_dump(),
+            "cells": [
+                cell.model_dump()
+                for cell in evidence.calibration.cells
+                if cell.model_id == bundle.payload.decision.selected_model
+                and cell.horizon <= maximum
+            ],
+        }
+    )
+    return apply_demand_intervals(points, calibration)
+
+
 MODEL_LIMITATIONS = (
     "Synthetic-only local evidence; not customer accuracy or production approval.",
     "Univariate nonnegative point forecasts; no covariates, intervals or reconciliation.",
@@ -501,12 +712,22 @@ MODEL_LIMITATIONS = (
 )
 
 
+def _model_limitations(payload: DemandBundlePayload) -> list[str]:
+    if payload.uncertainty is None:
+        return list(MODEL_LIMITATIONS)
+    return [item for item in MODEL_LIMITATIONS if "no covariates, intervals" not in item] + [
+        "Univariate residual intervals; no learned quantiles, covariates or reconciliation.",
+        "Dependent rolling residuals do not guarantee time-series coverage.",
+        "Frozen calibration and training policy; no adaptive recalibration or new origins.",
+    ]
+
+
 def demand_model_card(bundle: DemandModelBundle) -> dict[str, object]:
     """Immutable machine-readable model card; registry events own mutable status."""
     verify_demand_bundle(bundle)
     payload = bundle.payload
-    return {
-        "schema_version": "demand-model-card-v1",
+    card: dict[str, object] = {
+        "schema_version": "demand-model-card-v2" if payload.uncertainty else "demand-model-card-v1",
         "artifact_id": bundle.artifact_id,
         "created_at": payload.created_at.isoformat(),
         "created_by": payload.created_by,
@@ -534,9 +755,12 @@ def demand_model_card(bundle: DemandModelBundle) -> dict[str, object]:
         "validation_metrics": [row.model_dump(mode="json") for row in payload.validation_metrics],
         "holdout_metrics": [row.model_dump(mode="json") for row in payload.holdout_metrics],
         "lineage": payload.lineage.model_dump(mode="json"),
-        "limitations": list(MODEL_LIMITATIONS),
+        "limitations": _model_limitations(payload),
         "approval_authority": "Local registry audit events only; this card never grants approval.",
     }
+    if payload.uncertainty is not None:
+        card["uncertainty"] = payload.uncertainty.model_dump(mode="json")
+    return card
 
 
 def render_demand_model_card(bundle: DemandModelBundle) -> str:
@@ -545,7 +769,7 @@ def render_demand_model_card(bundle: DemandModelBundle) -> str:
         "# Demand forecasting model card\n\n"
         f"Artifact: `{bundle.artifact_id}`\n\n"
         "## Scope and limitations\n\n"
-        + "\n".join(f"- {item}" for item in MODEL_LIMITATIONS)
+        + "\n".join(f"- {item}" for item in _model_limitations(bundle.payload))
         + "\n\n## Versioned model, evaluation and lineage evidence\n\n```json\n"
         + json.dumps(card, indent=2, ensure_ascii=True, allow_nan=False)
         + "\n```\n"

@@ -47,6 +47,12 @@ See [model lifecycle](../governance/demand-model-lifecycle.md) for scope and tru
 boundaries. Slice 4's optional statistical extra remains the only added model
 dependency; slice 5 adds no dependency.
 
+The slice-6 follow-up extends the same artifact/registry/CLI surfaces with
+v2 interval artifacts, cards, explicit interval policy and approved-model
+interval inference. `core/evaluation/demand_uncertainty.py` owns three-block
+calibration/evaluation and `core/data/demand_intervals.py` owns the additive
+interval contract. No namespace migration or dependency addition is made.
+
 ## Migration boundaries
 
 - Revenue snapshot data/bundles are never silently accepted as demand inputs.

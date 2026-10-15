@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import pandas as pd
-from pydantic import Field, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from revenue_prediction.core.data.contracts import ContractViolation
 from revenue_prediction.core.inference.demand_artifacts import (
@@ -19,11 +19,13 @@ from revenue_prediction.core.inference.demand_artifacts import (
     ArtifactRecord,
     DemandModelBundle,
     Digest,
+    SeriesIntervalEvaluationMetric,
     canonical_json,
     content_digest,
     dataframe_records,
     demand_model_card,
     predict_demand_bundle,
+    predict_demand_interval_bundle,
     verify_demand_bundle,
 )
 
@@ -43,17 +45,40 @@ class LocalPrincipal(ArtifactRecord):
         return self
 
 
+class IntervalApprovalPolicy(ArtifactRecord):
+    """Explicit limits in demand units, applied to portfolio and every series/horizon."""
+
+    nominal_coverage: float = Field(gt=0, lt=1)
+    minimum_empirical_coverage: float = Field(ge=0, le=1)
+    maximum_mean_width: float = Field(ge=0)
+    maximum_mean_interval_score: float = Field(ge=0)
+    maximum_pinball_loss: float = Field(ge=0)
+    minimum_calibration_predictions: int = Field(ge=1, strict=True)
+
+
 class LocalApprovalPolicy(ArtifactRecord):
     """Explicit illustrative acceptance limits, fixed when a registry is created."""
 
-    schema_version: Literal["demand-local-policy-v1"] = "demand-local-policy-v1"
+    schema_version: Literal["demand-local-policy-v1", "demand-local-policy-v2"] = (
+        "demand-local-policy-v1"
+    )
     principals: tuple[LocalPrincipal, ...] = Field(min_length=2)
     max_holdout_primary_metric: float = Field(ge=0)
     max_abs_holdout_bias_fraction: float = Field(ge=0)
     require_seasonal_noninferiority: bool = True
+    intervals: IntervalApprovalPolicy | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = handler(self)
+        if self.intervals is None:
+            result.pop("intervals", None)
+        return result
 
     @model_validator(mode="after")
     def _separation_possible(self) -> LocalApprovalPolicy:
+        if (self.schema_version == "demand-local-policy-v2") != (self.intervals is not None):
+            raise ValueError("Only demand-local-policy-v2 must contain interval thresholds.")
         actors = [item.actor_id for item in self.principals]
         if len(set(actors)) != len(actors):
             raise ValueError("Policy actor IDs must be unique.")
@@ -201,6 +226,49 @@ def _approval_gates(bundle: DemandModelBundle, policy: LocalApprovalPolicy) -> N
             raise ContractViolation(
                 f"Approval blocked: holdout {metric} at horizon {horizon} degrades seasonal naive."
             )
+    evidence = payload.uncertainty
+    limits = policy.intervals
+    if evidence is None:
+        if limits is not None:
+            raise ContractViolation(
+                "Approval blocked: interval policy requires an interval artifact."
+            )
+        return
+    if limits is None:
+        raise ContractViolation(
+            "Approval blocked: interval artifact requires explicit interval policy."
+        )
+    if evidence.calibration.nominal_coverage != limits.nominal_coverage:
+        raise ContractViolation("Approval blocked: interval nominal coverage differs from policy.")
+    if any(
+        cell.n_predictions < limits.minimum_calibration_predictions
+        for cell in evidence.calibration.cells
+        if cell.model_id == payload.decision.selected_model
+    ):
+        raise ContractViolation(
+            "Approval blocked: insufficient calibration predictions for policy."
+        )
+    for row in (*evidence.holdout_metrics, *evidence.series_holdout_metrics):
+        if row.model_id != payload.decision.selected_model:
+            continue
+        scope = (
+            f"series {row.sku_id}/{row.channel_id}/{row.geography_id}"
+            if isinstance(row, SeriesIntervalEvaluationMetric)
+            else "portfolio"
+        )
+        for name, passes in [
+            ("coverage", row.empirical_coverage >= limits.minimum_empirical_coverage),
+            ("width", row.mean_interval_width <= limits.maximum_mean_width),
+            ("interval score", row.mean_interval_score <= limits.maximum_mean_interval_score),
+            (
+                "pinball loss",
+                max(row.lower_pinball_loss, row.upper_pinball_loss) <= limits.maximum_pinball_loss,
+            ),
+        ]:
+            if not passes:
+                raise ContractViolation(
+                    f"Approval blocked: interval {name} at {scope}, horizon {row.horizon} exceeds policy."
+                )
 
 
 def _validate_event(
@@ -383,6 +451,8 @@ def predict_registered_demand(
     path: Path,
     artifact_id: str,
     horizon: int | None = None,
+    *,
+    include_intervals: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Require approved model at a transactionally consistent audit revision.
 
@@ -395,7 +465,11 @@ def predict_registered_demand(
             raise ContractViolation(
                 f"Model is {record.status}; approved-model inference is blocked."
             )
-        forecast = predict_demand_bundle(record.bundle, horizon)
+        forecast = (
+            predict_demand_interval_bundle(record.bundle, horizon)
+            if include_intervals
+            else predict_demand_bundle(record.bundle, horizon)
+        )
         manifest: dict[str, object] = {
             "schema_version": "demand-inference-lineage-v1",
             "artifact_id": artifact_id,
@@ -407,4 +481,18 @@ def predict_registered_demand(
             "forecast_origin": record.bundle.payload.origin.isoformat(),
             "created_at": datetime.now(UTC).isoformat(),
         }
+        if include_intervals:
+            evidence = record.bundle.payload.uncertainty
+            if evidence is None:
+                raise ContractViolation("Interval inference requires bound interval evidence.")
+            manifest.update(
+                {
+                    "schema_version": "demand-inference-lineage-v2",
+                    "interval_schema_version": "demand-interval-v1",
+                    "calibration_sha256": evidence.calibration_sha256,
+                    "uncertainty_experiment_sha256": evidence.experiment_sha256,
+                    "nominal_coverage": evidence.calibration.nominal_coverage,
+                    "calibration_as_of": evidence.calibration.calibration_as_of.isoformat(),
+                }
+            )
         return forecast, manifest

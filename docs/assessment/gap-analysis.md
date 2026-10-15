@@ -1,7 +1,7 @@
 # Demand-forecasting gap analysis
 
 Status after slice 5 and the bounded slice-6 interval increment: offline forecasting,
-safe point-model artifacts, local governance and separately evaluated residual intervals. "Inherited" means implementation is
+safe point/interval artifacts, local governance and evaluated residual intervals. "Inherited" means implementation is
 present, not that the cloud path has been validated.
 
 | Requirement area | Current evidence | Gap / acceptance evidence | Phase |
@@ -15,8 +15,8 @@ present, not that the cloud path has been validated.
 | Model breadth | Thirteen point forecasters with numeric JSON state and frozen-origin bundles; revenue regression is separate | Additional statistical variants, ML/deep adapters, probabilistic interfaces and tested schema migrations | 5 |
 | AutoML | SDK v2 regression job builder | SDK v2 forecasting configuration, explicit temporal validation and cloud opt-in tests | 5 |
 | Pipelines | Local validation/backtesting, recomputed artifact evidence, model cards and transactional model-review lifecycle | Cloud component integration, reconciliation, publication and authenticated approval | 5, 8 |
-| Uncertainty | Separate versioned residual intervals/calibration JSON; temporal validation/calibration/holdout; coverage, width, interval score and nominal-tail pinball losses by series/horizon | Learned asymmetric/multilevel quantiles, adaptive calibration, interval-aware artifacts/cards/approval; no time-series coverage guarantee | 5 |
-| Evaluation | MASE/RMSSE, WAPE, bias, tracking signal, series/segment views, training-only diagnostics/trial failures, validation gates and separate interval holdout metrics | Costs/segment gates, residual acceptance, planner comparison and interval acceptance policies | 5 |
+| Uncertainty | Versioned residual intervals/calibration; temporal validation/calibration/holdout; series/horizon metrics; bound v2 artifacts/cards, local interval acceptance gates and inference sidecars | Learned asymmetric/multilevel quantiles, adaptive calibration and authenticated production review; no time-series coverage guarantee | 5 |
+| Evaluation | MASE/RMSSE, WAPE, bias, tracking signal, series/segment views, training-only diagnostics/trial failures, validation gates, interval holdout metrics and explicit local series/horizon interval gates | Costs/segment gates, residual acceptance, planner comparison and business-calibrated production policies | 5 |
 | Hierarchy | Static synthetic SKU-to-product/family/brand relationships validated | Reconciliation, grouped/temporal hierarchies, coherence tests and hierarchy versions | 5 |
 | Ensembles | Candidate comparison | Out-of-sample weights, version/approval metadata and explicit failed-model handling | 5 |
 | Fabric | Parquet/local I/O and examples | Medallion tables, Delta transactions, approved forecast records, semantic model and tested permissions | 6 |

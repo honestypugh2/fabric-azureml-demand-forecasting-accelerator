@@ -1,6 +1,6 @@
 # Demand model artifacts, lineage and local approval
 
-Slice 5 implements an **offline synthetic model lifecycle**. It is separate
+Slice 5 and the slice-6 follow-up implement an **offline synthetic model lifecycle**. It is separate
 from the inherited revenue MLflow/joblib path and from production Azure ML or
 Fabric authorization. Nothing in this workflow deploys a model, writes an
 official forecast or authenticates a person.
@@ -206,10 +206,121 @@ transactionally consistent **snapshot**, not a promise that it remains current
 after export; downstream consumers must recheck current status before later use.
 Revocation blocks subsequent calls but cannot retract files already exported.
 
-Point rows **always retain `approval_status=unapproved`**. Local approval of a
+Point and interval rows **always retain `approval_status=unapproved`**. Local approval of a
 model is not approval of its forecasts, official planning consensus, cloud
 deployment or publication. Standalone `predict_demand_bundle` is a research
 API for unapproved outputs and does not grant governance permission.
+
+## Interval artifacts and local approval
+
+The opt-in `--include-intervals` path packages `demand-bundle-v2`. Point-only
+`demand-bundle-v1` serialization and calls remain available, without an
+uncertainty field in their JSON. V2 binds the following to the artifact ID:
+
+- The same fitted point-model state, parameters, origin, cohort, frequency,
+  season length, expanding/sliding training policy and evaluated horizon.
+- The entire three-block uncertainty experiment and numeric calibration state.
+- Hashes of calibration predictions, calibration state, uncertainty configuration
+  and final-holdout intervals, alongside existing source/training/validation/
+  point-holdout/runtime/source-code lineage.
+- Portfolio and per-series interval coverage, width, interval score and
+  nominal-tail pinball metrics at every horizon and the combined-horizon view.
+
+Packaging reruns validation-only selection, calibration of the frozen winner/
+anchors and final holdout. It never accepts calibration from a separate model,
+editable CSV scores or a caller-selected replacement winner. Bundle validation
+checks experiment/parameter consistency, calibration targets/cutoff, full
+model/series/horizon cells/counts, metric coverage/counts and canonical hashes.
+The fitted snapshot uses only arrived history at its later origin, as before.
+Calibration describes the fixed **algorithm/parameters/training policy**,
+not the exact earlier fitted coefficients at every rolling origin.
+
+`demand-model-card-v2` includes all interval evidence, sample counts, temporal
+boundaries, hashes and explicit limitations. Bounds are symmetric residual
+intervals, not learned conditional quantiles. Time dependence, overlapping
+rolling targets and drift prevent a guaranteed time-series coverage claim.
+
+An interval artifact requires `demand-local-policy-v2` with an explicit
+`intervals` section. In addition to all existing point gates, approval requires:
+
+- Exact agreement on nominal coverage and sufficient calibration count.
+- Minimum empirical coverage, maximum mean width, maximum mean interval
+  score and maximum lower/upper pinball loss.
+- These gates at the **portfolio and every series**, at every horizon and
+  the combined-horizon view, for the selected model.
+
+The [example interval policy](../../configs/examples/demand-interval-approval.json)
+uses illustrative limits in demand units; it is **not** a recommended business
+acceptance policy. Predeclare a policy before examining holdout. Gates may
+reject approval but never retune radii, widen intervals or reselect a model.
+A v1 point policy cannot approve a v2 interval artifact; a v2 interval policy
+cannot approve a v1 point artifact. Existing registries keep their original
+policy: create a separate versioned store rather than silently replacing it.
+Independent reviewer, acknowledgement, audit revision and revocation rules
+apply unchanged to the complete artifact.
+
+Runnable monthly example (all paths must be fresh):
+
+```bash
+uv run revenue-prediction demand-uncertainty \
+  --config configs/examples/demand-uncertainty.json \
+  --out outputs/demand-interval-comparison
+
+uv run revenue-prediction demand-lifecycle package \
+  --comparison-dir outputs/demand-interval-comparison --include-intervals \
+  --origin 2024-01-01 --actor ACTOR-001 \
+  --out outputs/demand-interval-artifact
+
+uv run revenue-prediction demand-lifecycle init-registry \
+  --registry outputs/demand-interval-models.sqlite \
+  --policy configs/examples/demand-interval-approval.json
+
+uv run revenue-prediction demand-lifecycle register \
+  --registry outputs/demand-interval-models.sqlite \
+  --bundle outputs/demand-interval-artifact/model.json --actor ACTOR-001 \
+  --reason "Synthetic interval evaluation"
+```
+
+Use the actual artifact ID printed by `package` in place of
+`ARTIFACT_ID_PLACEHOLDER`:
+
+```bash
+uv run revenue-prediction demand-lifecycle transition \
+  --registry outputs/demand-interval-models.sqlite \
+  --artifact-id ARTIFACT_ID_PLACEHOLDER --actor ACTOR-001 --action submit \
+  --reason "Request independent interval review" --expected-revision 1
+
+uv run revenue-prediction demand-lifecycle transition \
+  --registry outputs/demand-interval-models.sqlite \
+  --artifact-id ARTIFACT_ID_PLACEHOLDER --actor ACTOR-002 --action approve \
+  --reason "Reviewed point and interval evidence" --expected-revision 2 \
+  --acknowledge-limitations
+
+uv run revenue-prediction demand-lifecycle forecast \
+  --registry outputs/demand-interval-models.sqlite \
+  --artifact-id ARTIFACT_ID_PLACEHOLDER --include-intervals \
+  --out outputs/demand-interval-inference
+```
+
+Approval may be blocked by any predeclared threshold; inspect the reason and
+keep the artifact unapproved or reject it. Do not loosen the policy merely to
+make the demonstration pass. A rejected model requires new development/versioning.
+
+Interval inference restores the artifact's fitted state and selected model's
+bound radii without optimization, new actuals, refitting or recalibration.
+Requests may shorten the horizon; they cannot change origin/cohort. Output
+uses `demand-interval-v1` and `demand-inference-lineage-v2`: the sidecar binds
+the exact exported interval row hash, artifact ID, approval event/revision,
+calibration and uncertainty-design hashes, coverage and calibration cutoff.
+Without the flag, the same approved v2 artifact can still export ordinary
+unapproved points with the existing v1 sidecar. Point-only artifacts cannot
+produce intervals through either inference API. Revocation blocks both paths.
+
+The existing exact-source fingerprint remains strict. This source change
+requires new packaging/review for older saved bundles; no automatic source or
+schema migration or transfer of old approvals is performed. The local trust
+boundary above still applies: hashes are not signatures and actor labels are
+not authenticated identities.
 
 ## Verification and remaining work
 
@@ -221,5 +332,7 @@ gates, stale revisions, rollback, hash-chain/tail checks and persistent CLI
 registration/approval/inference/revocation.
 
 No cloud registration, authenticated identity, cryptographic signing, schema
-migration, probabilistic output, automated schedules, retention or official
+migration, learned quantile models, adaptive calibration, automated schedules, retention or official
 forecast approval is claimed. See [ADR 0009](../architecture/adr/0009-demand-artifacts-and-local-governance.md).
+Interval behavior and trust boundaries are in
+[ADR 0011](../architecture/adr/0011-demand-interval-artifacts-and-review.md).

@@ -1,4 +1,4 @@
-# Demand prediction intervals: bounded slice-6 increment
+# Demand prediction intervals and governed local artifacts
 
 This is an **offline time-series** uncertainty workflow, not a regression
 confidence interval or a production forecast approval. It wraps the frozen
@@ -119,16 +119,28 @@ final-holdout intervals; validation ranking; point and interval metrics;
 per-series interval metrics; and frozen experiment, selection and calibration
 JSON. Holdout truth is used only to score the already constructed intervals.
 
-Not included in this bounded increment:
+## Governed uncertainty lifecycle
+
+The follow-up lifecycle packages a `demand-bundle-v2` containing the fitted
+winner, complete uncertainty experiment, calibration, per-series/horizon
+holdout interval metrics and content lineage. Packaging **recomputes** the
+three blocks from actuals/configuration rather than trusting standalone
+calibration JSON, predictions, CSV scores or a selection file.
+
+See the [interval lifecycle demonstration](../governance/demand-model-lifecycle.md#interval-artifacts-and-local-approval)
+for packaging, explicit interval acceptance policy, independent review,
+frozen interval inference and revocation. The unregistered helper remains a
+research API, not authorization. A point-only approval never enables intervals.
+
+Still not included:
 
 - Learned asymmetric quantiles, multiple coverage levels or adaptive calibration.
 - Calibration tuning/search or holdout-based interval/model reselection.
 - Joint multi-horizon/portfolio coverage or hierarchical reconciliation.
-- Interval-aware model cards, content lineage or local-registry approval gates.
-- Changes to slice-5 point artifacts, registered inference or approval policy.
 - Demand UI/API, cloud jobs, Fabric publication or official forecast approval.
 
-Point artifact schemas and approval semantics are unchanged, but the existing
+Point-only v1 serialization and approval semantics remain available; v2 explicitly
+adds interval capability and review. The existing
 strict source fingerprint includes **all** demand core modules. Adding these
 interval modules therefore intentionally invalidates bundles built from the
 slice-5 source tree. Repackage and independently review a new artifact under
@@ -136,5 +148,6 @@ the current source version, or use the matching slice-5 checkpoint for an old
 bundle. Do not edit saved hashes, bypass verification or reuse an old approval
 for a newly packaged artifact.
 
-See [ADR 0010](../architecture/adr/0010-demand-temporal-interval-calibration.md)
+See [ADR 0010](../architecture/adr/0010-demand-temporal-interval-calibration.md),
+[ADR 0011](../architecture/adr/0011-demand-interval-artifacts-and-review.md)
 and the [remaining gaps](../assessment/gap-analysis.md).
