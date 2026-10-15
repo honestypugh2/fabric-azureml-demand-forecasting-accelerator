@@ -3,6 +3,43 @@
 Assessed 2026-10-13 on branch `feat/demand-forecasting-foundation`. This is a
 first-slice assessment, not a production-readiness certification.
 
+## Bounded slice-6 interval increment (2026-10-14)
+
+Slice 5 was committed and pushed independently as `63837ff` before this work.
+The additive [uncertainty workflow](../modeling/uncertainty.md) now provides
+versioned residual intervals and calibration JSON, separate temporal
+validation/calibration/final-holdout blocks, and coverage/width/interval-score/
+nominal-tail pinball reports by horizon and series. Point selection remains
+MASE/RMSSE/WAPE-based; intervals do not replace the forecaster or relabel the
+point as a median.
+
+Executed evidence:
+
+- `make check`: Ruff and source Pyright passed; **416 passed, 2 live tests
+  skipped**, with nine inherited MLflow/Pydantic warnings.
+- **31 focused tests** passed, covering monthly/weekly workflows, exact
+  finite-sample ranks, JSON replay, future/holdout invariance, calibration-only
+  changes, incomplete cohorts, late truth, zero residuals, bounds and numeric
+  overflow. New-test Pyright and core interval-module Pylance syntax passed.
+- `make data && make train` passed; inherited gradient boosting remained champion.
+- The runnable monthly example persisted to `outputs/demand-slice-6-uncertainty`
+  and replayed in a separate directory. All **12** evidence files reproduced
+  exactly (dataframe values/dtypes for tabular files; bytes for JSON).
+- The synthetic example selected seasonal naive on validation. Across 72 final
+  holdout rows per model, empirical coverage was approximately **84.72%** for
+  seasonal naive and **81.94%** for naive at nominal 80%. Mean interval widths
+  were approximately 58.56 and 76.35 demand units respectively. These are
+  illustrative outcomes, not acceptance thresholds or coverage guarantees.
+- An earlier slice-5 bundle was intentionally rejected by the existing
+  all-demand-source fingerprint after these modules were added. Its saved
+  files/approval were not modified. Repackage and independently review under
+  the new source version; there is no integrity-check bypass.
+
+This is the initial bounded slice-6 increment, not full probabilistic lifecycle
+integration. Learned/multilevel quantiles, adaptive calibration, interval-aware
+model cards/lineage/approval and cloud/application publication remain pending.
+All forecasts remain unapproved. No resources were deployed.
+
 ## Safety and lineage
 
 - Repository: `honestypugh2/fabric-azureml-demand-forecasting-accelerator`.

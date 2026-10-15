@@ -9,7 +9,7 @@ backlog do not mean executable cloud capability.
 | --- | --- | --- | --- |
 | R01 | Monthly reforecasting | Demand `MS` requests, point baselines and rolling backtests | Local baseline path implemented; scheduler/integration pending |
 | R02 | Weekly reforecasting | Demand `W-MON` requests, point baselines and rolling backtests | Local baseline path implemented; scheduler/integration pending |
-| R03 | Configurable horizons | Frequency-aware requests and versioned point outputs, including beyond-season tests | Implemented locally; probabilistic/production contract pending |
+| R03 | Configurable horizons | Frequency-aware requests, versioned point outputs and separately calibrated interval contract | Implemented locally; interval-aware artifacts and production contract pending |
 | R04 | What-if planning | Versioned scenario store, conditional deterministic tools | Backlog; 7 |
 | R05 | Governed consensus | Separate baseline/ensemble/scenario/override/consensus/official records | Backlog; 7 |
 | R06 | Assumptions/external-signal explanations | Origin-filtered historical feature/source provenance | Historical source metadata implemented; external signals/explanations remaining 4-7 |
@@ -39,7 +39,7 @@ backlog do not mean executable cloud capability.
 | C04 | SDK v2 only | Existing SDK v2 paths preserved; scoped v1 source search found no matches |
 | C05 | Offline core and optional cloud | Tests need no credentials; core cloud dependency duplication remains a recorded gap |
 | C06 | Separate approval sources of truth | Local model registry owns approval status; point rows always remain unapproved; official/Gold approval pending |
-| C07 | Probabilistic/hierarchy evaluation | Stable synthetic hierarchy validated; reconciliation/interval algorithms pending |
+| C07 | Probabilistic/hierarchy evaluation | Separate temporal residual calibration with holdout coverage, width, interval score and nominal-tail pinball by series/horizon; learned quantiles and reconciliation pending |
 | C08 | Forecast/scenario/override audit lineage | Model/source/evaluation hashes and inference sidecars bind local approval revision; scenario/override/official lineage pending |
 | C09 | Local/cloud execution honesty | Live tests skipped; no cloud resources created or validated |
 | C10 | License/attribution | MIT references/inherited notices retained; optional statsmodels BSD-3-Clause and Patsy BSD-2-Clause metadata verified; no donor/library source copied |

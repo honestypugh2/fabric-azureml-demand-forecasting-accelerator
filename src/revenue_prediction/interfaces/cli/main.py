@@ -258,6 +258,78 @@ def demand_models() -> None:
     )
 
 
+@app.command("demand-uncertainty")
+def demand_uncertainty(
+    config_path: Path = typer.Option(
+        ..., "--config", help="Three-block uncertainty experiment JSON"
+    ),
+    actuals_path: Path | None = typer.Option(
+        None, "--actuals", help="Synthetic actuals parquet/csv; defaults to the synthetic generator"
+    ),
+    output_dir: Path = typer.Option(..., "--out", help="New evidence directory; never overwrite"),
+) -> None:
+    """Select time-series models, calibrate intervals, then evaluate untouched holdout."""
+    from revenue_prediction.core.data.contracts import ContractViolation
+    from revenue_prediction.core.data.demand_schema import DemandDataConfig
+    from revenue_prediction.core.data.io import read_dataset, write_dataset
+    from revenue_prediction.core.data.synthetic import generate_synthetic_demand_dataset
+    from revenue_prediction.core.evaluation.demand_uncertainty import (
+        DemandUncertaintyConfig,
+        run_demand_uncertainty,
+    )
+    from revenue_prediction.core.inference.demand_artifacts import canonical_json
+
+    try:
+        if output_dir.exists():
+            raise FileExistsError("Uncertainty output directory exists; choose a new directory.")
+        config = DemandUncertaintyConfig.model_validate_json(
+            config_path.read_text(encoding="utf-8")
+        )
+        actuals = (
+            read_dataset(actuals_path)
+            if actuals_path is not None
+            else generate_synthetic_demand_dataset(
+                DemandDataConfig(frequency=config.calibration.frequency)
+            )
+        )
+        result = run_demand_uncertainty(actuals, config)
+        output_dir.mkdir(parents=True, exist_ok=False)
+        for name, frame in {
+            "actuals.parquet": actuals,
+            "validation_predictions.parquet": result.validation.predictions,
+            "calibration_predictions.parquet": result.calibration_backtest.predictions,
+            "holdout_point_predictions.parquet": result.holdout.predictions,
+            "holdout_intervals.parquet": result.predictions,
+            "validation_ranking.csv": result.ranking,
+            "holdout_point_metrics.csv": result.holdout.metrics,
+            "interval_metrics.csv": result.metrics,
+            "series_interval_metrics.csv": result.series_metrics,
+        }.items():
+            write_dataset(frame, output_dir / name)
+        for name, model in {
+            "uncertainty_config.json": config,
+            "selection.json": result.decision,
+            "calibration.json": result.calibration,
+        }.items():
+            (output_dir / name).write_text(model.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        console.print(
+            canonical_json(
+                {
+                    "selected_model": result.decision.selected_model,
+                    "nominal_coverage": config.nominal_coverage,
+                    "approval_status": "unapproved",
+                    "scope": "offline intervals; not part of point-model approval",
+                    "directory": str(output_dir),
+                }
+            ),
+            markup=False,
+            soft_wrap=True,
+        )
+    except (ContractViolation, ValueError, ImportError, OSError) as exc:
+        console.print(f"Demand uncertainty failed: {exc}", style="red", markup=False)
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("compare-demand")
 def compare_demand(
     frequency: str = typer.Option("MS", "--frequency", help="MS or W-MON"),

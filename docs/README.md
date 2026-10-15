@@ -39,6 +39,8 @@ future work.
 | Optional statistical adapter and tuning decision | [ADR 0008](architecture/adr/0008-demand-adapters-and-tuning.md) |
 | Model serialization, cards, lineage and local approval | [governance/demand-model-lifecycle.md](governance/demand-model-lifecycle.md) |
 | Artifact and approval trust boundaries | [ADR 0009](architecture/adr/0009-demand-artifacts-and-local-governance.md) |
+| Offline intervals, temporal calibration and uncertainty metrics | [modeling/uncertainty.md](modeling/uncertainty.md) |
+| Interval calibration scope and limitations | [ADR 0010](architecture/adr/0010-demand-temporal-interval-calibration.md) |
 
 ### Inherited revenue documentation
 

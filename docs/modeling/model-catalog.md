@@ -47,8 +47,10 @@ under the repository's MIT license. The three optional statistical adapters
 call BSD-3-Clause statsmodels APIs; no library source is copied. Install with
 `uv sync --extra forecasting` (add `--extra api` to retain the API environment).
 All support `MS`/`W-MON`, local univariate
-point forecasting only. No covariates, probabilistic output, hierarchy
-reconciliation or live Azure validation is claimed.
+point forecasting. A separate [residual-calibration wrapper](uncertainty.md)
+adds offline prediction intervals without changing their point predictions.
+No learned quantile model, covariates, hierarchy reconciliation or live Azure
+validation is claimed.
 All thirteen support versioned data-only JSON state, frozen-origin bundles,
 model cards and [local approval controls](../governance/demand-model-lifecycle.md).
 Production cloud registration and authenticated approval remain future work.

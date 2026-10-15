@@ -1,0 +1,30 @@
+{
+  "nominal_coverage": 0.8,
+  "selection": {
+    "primary_metric": "mase",
+    "validation": {
+      "first_origin": "2022-01-01",
+      "evaluation_as_of": "2022-05-01",
+      "frequency": "MS",
+      "horizon": 2,
+      "n_origins": 2,
+      "models": ["naive", "seasonal_naive", "drift", "ses", "holt_damped"]
+    },
+    "holdout": {
+      "first_origin": "2022-11-01",
+      "evaluation_as_of": "2023-03-01",
+      "frequency": "MS",
+      "horizon": 2,
+      "n_origins": 3,
+      "models": ["naive", "seasonal_naive", "drift", "ses", "holt_damped"]
+    }
+  },
+  "calibration": {
+    "first_origin": "2022-05-01",
+    "evaluation_as_of": "2022-11-01",
+    "frequency": "MS",
+    "horizon": 2,
+    "n_origins": 5,
+    "models": ["naive", "seasonal_naive", "drift", "ses", "holt_damped"]
+  }
+}
