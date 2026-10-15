@@ -38,6 +38,15 @@ request to scaffold empty abstractions. Reuse existing helpers where semantics
 match. Optional libraries stay behind extras and guarded imports. The new
 first-slice code adds no dependencies and leaves manifests/locks unchanged.
 
+Slice 5 remains in the inherited namespace: demand forecaster state is in
+`core/models/demand_forecasters.py`, safe artifacts/cards and snapshot inference
+in `core/inference/demand_artifacts.py`, local governance in
+`ops/demand_registry.py`, and commands in `interfaces/cli/demand_lifecycle.py`.
+These are implemented surfaces, not empty target-namespace scaffolding.
+See [model lifecycle](../governance/demand-model-lifecycle.md) for scope and trust
+boundaries. Slice 4's optional statistical extra remains the only added model
+dependency; slice 5 adds no dependency.
+
 ## Migration boundaries
 
 - Revenue snapshot data/bundles are never silently accepted as demand inputs.

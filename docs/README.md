@@ -37,6 +37,8 @@ future work.
 | Demand time-series modeling decision | [ADR 0007](architecture/adr/0007-demand-time-series-model-selection.md) |
 | Parameter tuning, sparse-demand demos and diagnostics | [modeling/tuning.md](modeling/tuning.md) |
 | Optional statistical adapter and tuning decision | [ADR 0008](architecture/adr/0008-demand-adapters-and-tuning.md) |
+| Model serialization, cards, lineage and local approval | [governance/demand-model-lifecycle.md](governance/demand-model-lifecycle.md) |
+| Artifact and approval trust boundaries | [ADR 0009](architecture/adr/0009-demand-artifacts-and-local-governance.md) |
 
 ### Inherited revenue documentation
 

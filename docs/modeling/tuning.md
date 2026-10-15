@@ -124,7 +124,12 @@ parameter selection and persisted configuration/metric/prediction roundtrips.
 Statistical tests opt out if the optional package is absent; install the extra
 to exercise them. Core-only import/forecast tests block statsmodels explicitly.
 
-Not implemented: model serialization/production registry, probabilistic
+Model serialization, cards, lineage and a local-only approval registry are
+implemented in the [model lifecycle](../governance/demand-model-lifecycle.md).
+Packaging recomputes the grid and requires its frozen configuration to match;
+editing trial CSVs cannot approve an artifact.
+
+Not implemented: production registry/identity, probabilistic
 forecasts, inventory/service-cost optimization, ACF/PACF/residual acceptance
 gates, revised vintages, external covariates, reconciliation and live cloud
 validation. See [ADR 0008](../architecture/adr/0008-demand-adapters-and-tuning.md).

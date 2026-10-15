@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Literal, Protocol
 
 import numpy as np
@@ -79,6 +80,7 @@ class ForecasterCapability:
     supports_hierarchical_reconciliation: bool = False
     local_execution: bool = True
     azure_execution_validated: bool = False
+    supports_json_state: bool = True
 
 
 _CAPABILITIES = (
@@ -171,6 +173,72 @@ def demand_model_capability(model_id: str) -> ForecasterCapability:
     )
 
 
+class HoltWintersState(BaseModel):
+    """Only numeric fitted coefficients/initialization, never executable objects."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    smoothing_level: float = Field(ge=0, le=1)
+    smoothing_trend: float | None = Field(default=None, ge=0, le=1)
+    smoothing_seasonal: float | None = Field(default=None, ge=0, le=1)
+    damping_trend: float | None = Field(default=None, gt=0, le=1)
+    initial_level: float
+    initial_trend: float | None = None
+    initial_seasons: tuple[float, ...] = ()
+
+
+class DemandForecasterState(BaseModel):
+    """Versioned JSON state; deterministic replay/filtering never reoptimizes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    schema_version: Literal["demand-state-v1"] = "demand-state-v1"
+    model_id: str
+    parameters: TimeSeriesModelConfig
+    frequency: DemandFrequency
+    seasonal_periods: int = Field(ge=1, strict=True)
+    dates: tuple[datetime, ...] = Field(min_length=1)
+    values: tuple[Annotated[float, Field(ge=0)], ...] = Field(min_length=1)
+    holt_winters: HoltWintersState | None = None
+    arima_parameters: tuple[float, ...] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _consistent_state(self) -> DemandForecasterState:
+        demand_model_capability(self.model_id)
+        if len(self.dates) != len(self.values):
+            raise ValueError("State dates and values must have identical lengths.")
+        if any(
+            value.tzinfo is not None or value.time() != datetime.min.time() for value in self.dates
+        ):
+            raise ValueError("State dates must be timezone-naive midnight period starts.")
+        if (self.model_id == "ets") != (self.holt_winters is not None):
+            raise ValueError("Only ETS requires Holt-Winters coefficients.")
+        if (self.model_id in {"arima", "sarima"}) != (self.arima_parameters is not None):
+            raise ValueError("Only ARIMA/SARIMA require fitted ARIMA parameters.")
+        if self.holt_winters is not None:
+            state = self.holt_winters
+            trend = self.parameters.ets_trend is not None
+            if trend != (state.smoothing_trend is not None) or trend != (
+                state.initial_trend is not None
+            ):
+                raise ValueError("ETS trend state differs from its configuration.")
+            seasonal = self.parameters.ets_seasonal is not None
+            if seasonal != (state.smoothing_seasonal is not None) or len(state.initial_seasons) != (
+                self.seasonal_periods if seasonal else 0
+            ):
+                raise ValueError("ETS seasonal state differs from its configuration.")
+            if self.parameters.ets_damped != (state.damping_trend is not None):
+                raise ValueError("ETS damping state differs from its configuration.")
+        validate_demand_model_history(
+            self.model_id,
+            pd.DataFrame({"date": pd.to_datetime(self.dates), DEMAND_TARGET: self.values}),
+            self.frequency,
+            self.seasonal_periods,
+            self.parameters,
+        )
+        return self
+
+
 class Forecaster(Protocol):
     """Minimal fitted time-series interface; unsupported capabilities stay explicit."""
 
@@ -184,12 +252,28 @@ class Forecaster(Protocol):
         """Forecast complete future dates without observing future targets."""
         ...
 
+    def export_state(self) -> DemandForecasterState:
+        """Export safe data-only state for restoration without coefficient optimization."""
+        ...
+
 
 class _LocalForecaster:
     def __init__(self, capability: ForecasterCapability, config: TimeSeriesModelConfig) -> None:
         self.capability = capability
         self.config = config
         self._history: pd.DataFrame | None = None
+
+    def export_state(self) -> DemandForecasterState:
+        if self._history is None:
+            raise RuntimeError("Fit before exporting forecaster state.")
+        return DemandForecasterState(
+            model_id=self.capability.model_id,
+            parameters=self.config,
+            frequency=self._frequency,
+            seasonal_periods=self._season,
+            dates=tuple(pd.Timestamp(value).to_pydatetime() for value in self._history["date"]),
+            values=tuple(float(value) for value in self._values),
+        )
 
     def fit(self, history: pd.DataFrame, frequency: DemandFrequency, seasonal_periods: int) -> None:
         self._history = None
@@ -343,6 +427,9 @@ def validate_demand_model_history(
             "enlarge history/window or explicitly choose another forecaster."
         )
     dates = pd.DatetimeIndex(history["date"])
+    aligned = dates.day == 1 if frequency == "MS" else dates.dayofweek == 0
+    if dates.tz is not None or not np.all(aligned) or not dates.equals(dates.normalize()):
+        raise ContractViolation("Forecaster dates must be aligned timezone-naive period starts.")
     if not dates.is_unique or not dates.is_monotonic_increasing:
         raise ContractViolation("Forecaster history must have unique chronological period dates.")
     if capability.requires_contiguous_history and not dates.equals(
@@ -410,6 +497,102 @@ class _StatisticalForecaster(_LocalForecaster):
         if not np.isfinite(prediction).all():
             raise ContractViolation("Statistical forecaster produced nonfinite predictions.")
         return np.maximum(prediction, 0).astype(float)
+
+    def export_state(self) -> DemandForecasterState:
+        if self._history is None:
+            raise RuntimeError("Fit before exporting forecaster state.")
+        state: dict[str, object] = {
+            "model_id": self.capability.model_id,
+            "parameters": self.config,
+            "frequency": self._frequency,
+            "seasonal_periods": self._season,
+            "dates": tuple(self._history["date"]),
+            "values": tuple(float(value) for value in self._values),
+        }
+        if self.capability.model_id == "ets":
+            fitted = self._fitted.params
+            state["holt_winters"] = HoltWintersState(
+                smoothing_level=float(fitted["smoothing_level"]),
+                smoothing_trend=float(fitted["smoothing_trend"]) if self.config.ets_trend else None,
+                smoothing_seasonal=float(fitted["smoothing_seasonal"])
+                if self.config.ets_seasonal
+                else None,
+                damping_trend=float(fitted["damping_trend"]) if self.config.ets_damped else None,
+                initial_level=float(fitted["initial_level"]),
+                initial_trend=float(fitted["initial_trend"]) if self.config.ets_trend else None,
+                initial_seasons=tuple(float(value) for value in fitted["initial_seasons"])
+                if self.config.ets_seasonal
+                else (),
+            )
+        else:
+            state["arima_parameters"] = tuple(float(value) for value in self._fitted.params)
+        return DemandForecasterState.model_validate(state)
+
+
+def restore_demand_forecaster(state: DemandForecasterState) -> Forecaster:
+    """Reconstruct numeric state with fixed coefficients; no pickle or optimizer."""
+    state = DemandForecasterState.model_validate(state.model_dump())
+    capability = demand_model_capability(state.model_id)
+    model = (
+        _StatisticalForecaster(capability, state.parameters)
+        if capability.provider == "statsmodels"
+        else _LocalForecaster(capability, state.parameters)
+    )
+    history = pd.DataFrame({"date": pd.to_datetime(state.dates), DEMAND_TARGET: state.values})
+    _LocalForecaster.fit(model, history, state.frequency, state.seasonal_periods)
+    if isinstance(model, _StatisticalForecaster):
+        try:
+            from statsmodels.tsa.holtwinters import ExponentialSmoothing
+            from statsmodels.tsa.statespace.sarimax import SARIMAX
+        except ImportError as exc:
+            raise ImportError(
+                "Restore statistical state with uv sync --extra forecasting."
+            ) from exc
+        try:
+            if state.holt_winters is not None:
+                fitted = state.holt_winters
+                model._fitted = ExponentialSmoothing(
+                    np.asarray(state.values),
+                    trend=state.parameters.ets_trend,
+                    damped_trend=state.parameters.ets_damped,
+                    seasonal=state.parameters.ets_seasonal,
+                    seasonal_periods=state.seasonal_periods
+                    if state.parameters.ets_seasonal
+                    else None,
+                    initialization_method="known",
+                    initial_level=fitted.initial_level,
+                    initial_trend=fitted.initial_trend,
+                    initial_seasonal=np.asarray(fitted.initial_seasons)
+                    if state.parameters.ets_seasonal
+                    else None,
+                ).fit(
+                    smoothing_level=fitted.smoothing_level,
+                    smoothing_trend=fitted.smoothing_trend,
+                    smoothing_seasonal=fitted.smoothing_seasonal,
+                    damping_trend=fitted.damping_trend,
+                    optimized=False,
+                    remove_bias=False,
+                )
+            else:
+                estimator = SARIMAX(
+                    np.asarray(state.values),
+                    order=state.parameters.arima_order,
+                    seasonal_order=(*state.parameters.sarima_order, state.seasonal_periods)
+                    if state.model_id == "sarima"
+                    else (0, 0, 0, 0),
+                    trend="n",
+                    enforce_stationarity=True,
+                    enforce_invertibility=True,
+                )
+                if (
+                    state.arima_parameters is None
+                    or len(state.arima_parameters) != estimator.k_params
+                ):
+                    raise ContractViolation("ARIMA state parameter count differs from estimator.")
+                model._fitted = estimator.filter(np.asarray(state.arima_parameters))
+        except (ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
+            raise ContractViolation(f"Cannot restore statistical state: {exc}") from exc
+    return model
 
 
 def create_demand_forecaster(

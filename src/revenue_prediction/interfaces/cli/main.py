@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from revenue_prediction.config.loader import load_settings
+from revenue_prediction.interfaces.cli.demand_lifecycle import app as demand_lifecycle_app
 
 app = typer.Typer(
     help="Healthcare facility net-revenue prediction accelerator (synthetic data).",
@@ -21,6 +22,7 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+app.add_typer(demand_lifecycle_app, name="demand-lifecycle")
 
 
 @app.command("generate-data")

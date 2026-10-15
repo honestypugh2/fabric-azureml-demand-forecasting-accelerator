@@ -1,6 +1,6 @@
 # Demand-forecasting gap analysis
 
-Status after slice 4: offline time-series adapters, parameter tuning and diagnostics. "Inherited" means implementation is
+Status after slice 5: offline forecasting, safe model artifacts and local governance. "Inherited" means implementation is
 present, not that the cloud path has been validated.
 
 | Requirement area | Current evidence | Gap / acceptance evidence | Phase |
@@ -11,9 +11,9 @@ present, not that the cloud path has been validated.
 | Availability/leakage | Origin-filtered calendar lags/rolling features, arrival provenance and future-value invariance tests | Vintage-aware external signals, revised values and planned covariates | 4 |
 | Reforecasting | Monthly/weekly local baseline inference with configurable origin/horizon | Automated schedules and application/cloud integration | 4-5 |
 | Baselines/backtesting | Five baselines, rolling origins, predeclared validation-only parameter grids, series/segment metrics and separated final holdout | Strategic segment/cost gates, broader search and business acceptance | 4-5 |
-| Model breadth | Thirteen demand point forecasters: baselines, SES/Holt, Croston/SBA/TSB and optional statsmodels ETS/ARIMA/SARIMA; revenue regression is separate | Additional statistical variants, ML/deep adapters, serialization and probabilistic interfaces | 5 |
+| Model breadth | Thirteen point forecasters with numeric JSON state and frozen-origin bundles; revenue regression is separate | Additional statistical variants, ML/deep adapters, probabilistic interfaces and tested schema migrations | 5 |
 | AutoML | SDK v2 regression job builder | SDK v2 forecasting configuration, explicit temporal validation and cloud opt-in tests | 5 |
-| Pipelines | Training/scoring/evaluation assets | Independently tested validation, backtesting, reconciliation, approval, publication and model-card components | 5, 8 |
+| Pipelines | Local validation/backtesting, recomputed artifact evidence, model cards and transactional model-review lifecycle | Cloud component integration, reconciliation, publication and authenticated approval | 5, 8 |
 | Uncertainty | Not part of new demand schema | Quantiles/intervals, pinball loss, coverage and width by horizon | 5 |
 | Evaluation | MASE/RMSSE, WAPE, bias, tracking signal, series/segment views, training-only pattern/structural diagnostics and trial failures; configurable validation/horizon gates | Costs/segment gates, residual acceptance, planner comparison and probabilistic calibration | 5 |
 | Hierarchy | Static synthetic SKU-to-product/family/brand relationships validated | Reconciliation, grouped/temporal hierarchies, coherence tests and hierarchy versions | 5 |
@@ -26,9 +26,9 @@ present, not that the cloud path has been validated.
 | Conversational access | Not implemented | Provider interfaces and authorized deterministic tools; no LLM official-forecast calculation | 7-8 |
 | Infrastructure | Multiple inherited profiles | Evidence-led primary IaC choice, app hosting, identity/network profiles and validation | 8 |
 | CI/CD | Manual workflows | Trusted push/PR offline gates, frontend tests, scans, links, containers; cloud remains manual | 8 |
-| Operations/governance | Revenue guidance and drift utilities | Demand monitoring, retraining, lineage, retention, approvals and model cards | 8 |
+| Operations/governance | Demand model cards, source/training/evaluation lineage, local roles/reviewer separation, audit chain/head, holdout gates and revocation | Authenticated identity, protected/signed storage/audit, production registry, monitoring, retraining and retention | 8 |
 | Cost/support/effort | Inherited cost/operations docs | Parameterized profiles, priced assumptions with source/date, ownership and effort uncertainty | 8 |
-| Demonstration | Synthetic monthly/weekly/sparse comparisons persist grids, trials, diagnostics, frozen configs and separate holdout | Full demand demonstration including governance; live steps separately evidenced | 9 |
+| Demonstration | Synthetic comparisons plus local packaging/cards, registration, independent review, inference and revocation | Full application/governed official publication; live steps separately evidenced | 9 |
 
 ## First-slice blockers versus follow-up risks
 

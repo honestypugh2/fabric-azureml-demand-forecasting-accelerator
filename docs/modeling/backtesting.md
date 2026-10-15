@@ -192,6 +192,11 @@ identity/parameters stay fixed. This is prequential reforecasting, not
 holdout-driven model tuning. Keep a separate experiment if you revise the
 policy after looking at these final results.
 
+The [model lifecycle](../governance/demand-model-lifecycle.md) packages a
+selected model after recomputing this evidence, binds lineage, generates model
+cards and applies independent local review. Model selection itself remains
+unapproved; point predictions never become official forecasts automatically.
+
 ## Tests and limits
 
 ```bash

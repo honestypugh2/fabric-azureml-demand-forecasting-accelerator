@@ -48,9 +48,10 @@ call BSD-3-Clause statsmodels APIs; no library source is copied. Install with
 `uv sync --extra forecasting` (add `--extra api` to retain the API environment).
 All support `MS`/`W-MON`, local univariate
 point forecasting only. No covariates, probabilistic output, hierarchy
-reconciliation, live Azure validation or serialization API is claimed.
-Persisted experiment configs and metadata reproduce the local comparison;
-registered production model artifacts remain future work.
+reconciliation or live Azure validation is claimed.
+All thirteen support versioned data-only JSON state, frozen-origin bundles,
+model cards and [local approval controls](../governance/demand-model-lifecycle.md).
+Production cloud registration and authenticated approval remain future work.
 
 ### Fitting and horizon specifics
 

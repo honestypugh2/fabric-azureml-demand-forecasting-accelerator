@@ -224,3 +224,61 @@ probabilistic forecasts, inventory costs, residual/segment acceptance,
 reconciliation and live integrations remain future work.
 See [tuning workflow](../modeling/tuning.md) and
 [ADR 0008](../architecture/adr/0008-demand-adapters-and-tuning.md).
+
+## Fifth slice: model artifacts, cards, lineage and local approval
+
+Added data-only JSON fitted-state export/restore for all thirteen demand models.
+Original states replay deterministic recurrences, ETS restores fixed optimized
+coefficients/initialization, and ARIMA/SARIMA restores through fixed-parameter
+filtering. No pickle/executable object format, new dependency or optimization
+on load was added.
+
+Versioned content-addressed bundles bind the selected model, parameters, fixed
+cohort/origin/horizon, closed/arrived training observations, recomputed
+validation/holdout evidence, optional tuning hashes, exact runtimes and demand
+source fingerprints. Packaging never trusts editable score CSVs as evidence.
+Machine-readable/Markdown model cards report scope, training, metrics, lineage
+and limitations; their approval claims cannot override registry events.
+
+The local SQLite registry enforces explicit roles, creator/submitter separation
+from reviewers, reasons, limitations acknowledgement, complete-horizon holdout
+metric/bias/noninferiority gates, exact-revision transactional writes,
+hash-linked audit events plus an independently stored head, and terminal
+rejection/revocation. Approved-model inference persists artifact/revision/
+approval-event/forecast hashes. Point rows remain unapproved.
+
+| Validation | Executed result |
+| --- | --- |
+| Final `make check` | Ruff passed; Pyright zero errors; 385 passed, 2 live tests skipped, 9 inherited warnings |
+| New lifecycle source/test typing | Passed |
+| Focused artifact/registry/CLI coverage | 86 passed; four-module combined statement/branch coverage 90% (includes the extended existing forecaster module) |
+| Fitted-state restoration | All thirteen models at monthly/weekly frequency; original snapshots exact in runtime probes, statistical comparisons within 1e-12 |
+| Statistical restoration controls | Optional ETS components and optimizer-free ETS/ARIMA/SARIMA restoration tested; selected ETS bundle/provider lineage roundtrip passed |
+| Persistent monthly demonstration | Seasonal-naive artifact, independent approval, exact Parquet/sidecar reproduction, revocation and blocked subsequent inference |
+| Persistent weekly demonstration | Damped-Holt artifact, failed holdout gate, no appended approval/no inference files, explicit rejection without reselection |
+| Wheel build/content/fresh-process use | Passed; wheel restored source-created artifact and exactly reproduced persisted monthly predictions |
+| Core-only fresh process | Blocked statsmodels imports; original-model artifact loading/inference still passed |
+| `make data && make train` | Inherited revenue workflow passed; gradient boosting champion unchanged |
+| Lock consistency and whitespace | Passed |
+| Pylance syntax checks | Passed for artifact, registry and lifecycle CLI modules |
+
+The monthly example's holdout MASE was 0.4201 and passed the predeclared
+illustrative policy before being revoked at the end of the exercise. The weekly
+validation winner's holdout MASE was 1.0202, exceeding that policy's maximum
+1.0; approval was blocked and the model rejected, not replaced from holdout.
+These synthetic values do not establish customer accuracy or business acceptance.
+
+A coverage rerun exposed that enforcing increasing wall-clock timestamps can
+reject a valid sequential operation when the clock moves backward. The audit
+now orders by transactional revision/hash links while recording UTC time as
+observed, with an explicit clock-correction regression test. No timestamp
+clamping or silent retry hides the clock change.
+
+The implemented trust boundary is local/offline only: actor IDs are asserted,
+not authenticated identities; hashes are not signatures; a filesystem owner can
+rewrite data and hashes. Model approval is never official forecast approval.
+Protected production registry/audit storage, Entra authorization, signing,
+retention, schema migrations and cloud deployment remain unimplemented.
+No namespace rename, UI changes, commits or pushes were performed in this slice.
+See [model lifecycle](../governance/demand-model-lifecycle.md) and
+[ADR 0009](../architecture/adr/0009-demand-artifacts-and-local-governance.md).

@@ -1,0 +1,10 @@
+{
+  "schema_version": "demand-local-policy-v1",
+  "principals": [
+    {"actor_id": "ACTOR-001", "roles": ["builder", "submitter"]},
+    {"actor_id": "ACTOR-002", "roles": ["reviewer"]}
+  ],
+  "max_holdout_primary_metric": 1.0,
+  "max_abs_holdout_bias_fraction": 0.2,
+  "require_seasonal_noninferiority": true
+}

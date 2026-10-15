@@ -14,9 +14,9 @@ backlog do not mean executable cloud capability.
 | R05 | Governed consensus | Separate baseline/ensemble/scenario/override/consensus/official records | Backlog; 7 |
 | R06 | Assumptions/external-signal explanations | Origin-filtered historical feature/source provenance | Historical source metadata implemented; external signals/explanations remaining 4-7 |
 | R07 | Multiple model families | Thirteen registry forecasters including optional ETS/ARIMA/SARIMA and original Croston/SBA/TSB; revenue regression is separate | Implemented locally; additional variants and ML/deep adapters pending |
-| R08 | Transparent comparison | MASE/RMSSE, validation-only grids, complete trial failures, series/segment metrics, bias/horizon gates and final holdout | Implemented locally; segment/cost and production approval gates pending |
+| R08 | Transparent comparison | MASE/RMSSE, validation-only grids, series/segment metrics and separate holdout; recomputed evidence and explicit local approval gates/cards | Implemented locally; segment/cost and authenticated production approval pending |
 | R09 | Transparent ensemble weights | Out-of-sample weighting with version/scope/approval records | Backlog; 5 |
-| R10 | Replaceable models | Forecaster fit/predict protocol and immutable registry with guarded dependency/eligibility metadata, exposed through Python/CLI | Seasonal/intermittent adapters implemented; lifecycle methods pending |
+| R10 | Replaceable models | Forecaster fit/predict/export-state protocol, safe JSON restore, versioned bundles, runtime/source checks and local review registry | All thirteen serialized locally; production model registry/schema migrations pending |
 | R11 | Replaceable LLMs, no official calculation | Provider interface and authorized deterministic tools | Proposed boundary; 7 |
 | R12 | Weather/sentiment/events/price/promotion/constraints | Synthetic signals and known-future/observed/scenario distinctions | Realized price/promotion only; 4-7 |
 | R13 | Existing planning application outputs | Versioned approved forecast export schema | Backlog; 6 |
@@ -38,9 +38,9 @@ backlog do not mean executable cloud capability.
 | C03 | No random-row primary split | Demand expanding/sliding calendar rolling origins implemented; existing revenue temporal tests preserved |
 | C04 | SDK v2 only | Existing SDK v2 paths preserved; scoped v1 source search found no matches |
 | C05 | Offline core and optional cloud | Tests need no credentials; core cloud dependency duplication remains a recorded gap |
-| C06 | Separate approval sources of truth | Registry vs Gold recommendations recorded; approval enforcement pending |
+| C06 | Separate approval sources of truth | Local model registry owns approval status; point rows always remain unapproved; official/Gold approval pending |
 | C07 | Probabilistic/hierarchy evaluation | Stable synthetic hierarchy validated; reconciliation/interval algorithms pending |
-| C08 | Forecast/scenario/override audit lineage | Required record separation documented; persistence and enforcement pending |
+| C08 | Forecast/scenario/override audit lineage | Model/source/evaluation hashes and inference sidecars bind local approval revision; scenario/override/official lineage pending |
 | C09 | Local/cloud execution honesty | Live tests skipped; no cloud resources created or validated |
 | C10 | License/attribution | MIT references/inherited notices retained; optional statsmodels BSD-3-Clause and Patsy BSD-2-Clause metadata verified; no donor/library source copied |
 | C11 | Incremental migration | No namespace replacement, deletions or file moves in first slice |

@@ -1,5 +1,10 @@
 # Model governance
 
+This page describes the **inherited revenue workflow**, not demand model
+selection or approval. Demand uses validation-only time-series selection and
+separate holdout evidence. See the implemented
+[demand artifact and local approval lifecycle](demand-model-lifecycle.md).
+
 ## Lifecycle
 
 ```mermaid

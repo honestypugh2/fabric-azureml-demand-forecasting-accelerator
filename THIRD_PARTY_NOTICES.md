@@ -74,6 +74,10 @@ Full license texts remain in the installed distributions. No library source,
 example implementation or documentation prose is copied or vendored here.
 The adapters, Croston/SBA/TSB recurrences and synthetic scenarios are original
 work. See [ADR 0008](docs/architecture/adr/0008-demand-adapters-and-tuning.md).
+Safe JSON restoration also uses public statsmodels fixed-coefficient
+Holt-Winters/filter APIs; no executable object format or additional third-party
+source was introduced. See
+[ADR 0009](docs/architecture/adr/0009-demand-artifacts-and-local-governance.md).
 
 ## 5. Datasets
 
