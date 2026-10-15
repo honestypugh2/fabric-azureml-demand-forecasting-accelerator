@@ -3,6 +3,61 @@
 Assessed 2026-10-13 on branch `feat/demand-forecasting-foundation`. This is a
 first-slice assessment, not a production-readiness certification.
 
+## Slice-7 bottom-up hierarchy reconciliation (2026-10-15)
+
+The interval lifecycle was committed/pushed independently as `91b80eb`.
+Bounded slice 7 adds an origin-available, content-versioned static hierarchy,
+complete-cohort SKU/product/family/brand point reconciliation, per-level/node
+time-series evaluation and reproducible local lineage. Channel and geography
+remain separate; all outputs remain unapproved.
+
+Executed evidence:
+
+- Final `make check`: Ruff and source Pyright passed; **497 passed, 2 live
+  tests skipped**, with nine inherited MLflow/Pydantic warnings.
+- **44 focused tests** passed, including monthly/weekly workflows, exact leaf
+  preservation, coherence tolerances, stable/canonical parent mappings, sparse
+  channel/geography scope, future launches/values, late truth, sliding windows,
+  explicit cohorts, aggregate seasonal scales, missing descendants, undefined
+  scales, overflow, corrupt outputs and exact persisted CLI replay.
+- New source/test Pyright and modified-source Pylance syntax passed.
+- An additional runtime probe found the standalone coherence report could
+  hide a removed parent level through inner joins. The full source-backed
+  contract already rejected it. The report now independently rejects missing
+  nodes, duplicates and nonfinite values; four regression cases verify this
+  cannot produce a success-shaped incomplete audit.
+- `make data && make train` passed; inherited gradient boosting remained champion.
+- Built a wheel and ran a complete source-created hierarchy experiment from
+  its extracted package in a fresh process with statsmodels imports blocked.
+  The complete lineage digest matched exactly; temporary extraction was cleaned.
+
+Final-source monthly and weekly demonstrations are retained in
+`outputs/demand-slice-7-monthly-v2` and `outputs/demand-slice-7-weekly-v2`,
+with corresponding `-replay` directories. All **16 files per experiment**
+reproduced exactly: JSON/CSV bytes and Parquet dataframe values/dtypes.
+Both sidecars match the final implementation fingerprint.
+The monthly example retained seasonal naive; the weekly example selected naive
+on validation. Neither decision was changed by hierarchy or holdout metrics.
+The examples include nine SKUs, five products, three families and two brands:
+513 validation and 342 holdout node rows per experiment, with complete
+immediate-child coherence checks. These are synthetic demonstration results,
+not customer accuracy or business acceptance evidence.
+
+Totals cover the frozen origin-available cohort, not future launches or an
+implicit enterprise population. Aggregate MASE/RMSSE scales use complete
+arrived historical node periods and exact seasonal calendar pairs; they are
+not sums/averages of leaf scales. Missing evaluation truth fails the whole
+backtest. Summing interval bounds is explicitly unsupported.
+
+Earlier demonstration directories without `-v2` predate the standalone-report
+hardening; use final-source paths above. Existing strict demand-source
+fingerprints still require matching environments or new packaging/review of
+older model bundles; no migration or transferred approval is claimed.
+MinT, aggregate uncertainty, effective-dated/grouped/temporal hierarchies,
+hierarchy-aware model approval and cloud/application publication remain future
+work. See the [reconciliation guide](../modeling/reconciliation.md) and
+[ADR 0012](../architecture/adr/0012-demand-bottom-up-reconciliation.md).
+
 ## Slice-6 interval lifecycle follow-up (2026-10-15)
 
 The bounded interval increment was committed/pushed independently as `52cd073`.

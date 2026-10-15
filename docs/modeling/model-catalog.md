@@ -49,8 +49,9 @@ call BSD-3-Clause statsmodels APIs; no library source is copied. Install with
 All support `MS`/`W-MON`, local univariate
 point forecasting. A separate [residual-calibration wrapper](uncertainty.md)
 adds offline prediction intervals without changing their point predictions.
-No learned quantile model, covariates, hierarchy reconciliation or live Azure
-validation is claimed.
+No learned quantile model, covariates or live Azure validation is claimed.
+[Bottom-up point reconciliation](reconciliation.md) is a separate deterministic
+hierarchy layer, not a new forecaster or aggregate uncertainty method.
 All thirteen support versioned data-only JSON state, frozen-origin bundles,
 model cards and [local approval controls](../governance/demand-model-lifecycle.md).
 Production cloud registration and authenticated approval remain future work.

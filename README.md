@@ -1,7 +1,7 @@
 # Fabric + Azure ML Demand Forecasting Accelerator
 
 **Migration status: offline forecasting, tuning, point/interval artifacts and local
-model governance.** This repository inherits the
+model governance, plus frozen-hierarchy bottom-up point reconciliation.** This repository inherits the
 separate revenue-prediction accelerator. The existing CLI, training, API and
 educational UI still implement that revenue workflow; they have not yet been
 converted into a complete demand-forecasting application.
@@ -25,6 +25,7 @@ See the [time-series model catalog](docs/modeling/model-catalog.md),
 [validation-only tuning and sparse-demand demos](docs/modeling/tuning.md),
 [safe model artifacts, cards, lineage and local approval](docs/governance/demand-model-lifecycle.md),
 [offline temporal interval calibration](docs/modeling/uncertainty.md),
+[hierarchical point reconciliation and per-level metrics](docs/modeling/reconciliation.md),
 [baseline/backtesting guide](docs/modeling/backtesting.md) and
 [origin/leakage contract](docs/data/leakage-prevention.md). Forecasts are local
 and unapproved; validation-only selection is not production approval or publication.

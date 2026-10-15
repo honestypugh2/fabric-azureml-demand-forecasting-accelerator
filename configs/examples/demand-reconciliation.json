@@ -1,0 +1,19 @@
+{
+  "primary_metric": "mase",
+  "validation": {
+    "first_origin": "2023-01-01",
+    "evaluation_as_of": "2023-06-01",
+    "frequency": "MS",
+    "horizon": 3,
+    "n_origins": 3,
+    "models": ["naive", "seasonal_naive", "drift"]
+  },
+  "holdout": {
+    "first_origin": "2023-06-01",
+    "evaluation_as_of": "2024-01-01",
+    "frequency": "MS",
+    "horizon": 3,
+    "n_origins": 3,
+    "models": ["naive", "seasonal_naive", "drift"]
+  }
+}

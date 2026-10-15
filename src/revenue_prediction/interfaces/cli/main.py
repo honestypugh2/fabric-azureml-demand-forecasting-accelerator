@@ -330,6 +330,99 @@ def demand_uncertainty(
         raise typer.Exit(code=1) from exc
 
 
+@app.command("reconcile-demand")
+def reconcile_demand(
+    config_path: Path = typer.Option(
+        ..., "--config", help="Temporal point-selection experiment JSON"
+    ),
+    actuals_path: Path | None = typer.Option(None, "--actuals", help="Synthetic actuals Parquet"),
+    hierarchy_path: Path | None = typer.Option(
+        None,
+        "--hierarchy",
+        help="Frozen demand-hierarchy-v1 JSON; otherwise discover at first origin",
+    ),
+    n_skus: int = typer.Option(9, "--skus", min=1),
+    n_channels: int = typer.Option(1, "--channels", min=1),
+    n_geographies: int = typer.Option(1, "--geographies", min=1),
+    seed: int = typer.Option(42, "--seed", min=0),
+    output_dir: Path = typer.Option(..., "--out", help="New evidence directory; never overwrite"),
+) -> None:
+    """Reconcile synthetic point forecasts bottom-up; aggregate intervals are unsupported."""
+    from revenue_prediction.core.data.contracts import ContractViolation
+    from revenue_prediction.core.data.demand_hierarchy import DemandHierarchy
+    from revenue_prediction.core.data.demand_schema import DemandDataConfig
+    from revenue_prediction.core.data.io import read_dataset, write_dataset
+    from revenue_prediction.core.data.synthetic import generate_synthetic_demand_dataset
+    from revenue_prediction.core.evaluation.demand_reconciliation import run_demand_reconciliation
+    from revenue_prediction.core.evaluation.demand_selection import DemandSelectionConfig
+    from revenue_prediction.core.inference.demand_artifacts import canonical_json
+
+    try:
+        if output_dir.exists():
+            raise FileExistsError("Reconciliation output directory exists; choose a new directory.")
+        config = DemandSelectionConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
+        hierarchy = (
+            DemandHierarchy.model_validate_json(hierarchy_path.read_text(encoding="utf-8"))
+            if hierarchy_path is not None
+            else None
+        )
+        actuals = (
+            read_dataset(actuals_path)
+            if actuals_path is not None
+            else generate_synthetic_demand_dataset(
+                DemandDataConfig(
+                    frequency=config.validation.frequency,
+                    seed=seed,
+                    n_skus=n_skus,
+                    n_channels=n_channels,
+                    n_geographies=n_geographies,
+                )
+            )
+        )
+        result = run_demand_reconciliation(actuals, config, hierarchy)
+        output_dir.mkdir(parents=True, exist_ok=False)
+        write_dataset(actuals, output_dir / "actuals.parquet")
+        write_dataset(result.selection.ranking, output_dir / "validation_ranking.csv")
+        for name, leaf, nodes in [
+            ("validation", result.selection.validation, result.validation),
+            ("holdout", result.selection.holdout, result.holdout),
+        ]:
+            for suffix, frame in [
+                ("bottom_predictions.parquet", leaf.predictions),
+                ("nodes.parquet", nodes.predictions),
+                ("metrics.csv", nodes.metrics),
+                ("node_metrics.csv", nodes.node_metrics),
+                ("coherence.parquet", nodes.coherence),
+            ]:
+                write_dataset(frame, output_dir / f"{name}_{suffix}")
+        for name, model in [
+            ("experiment_config.json", config),
+            ("hierarchy.json", result.hierarchy),
+            ("selection.json", result.selection.decision),
+        ]:
+            (output_dir / name).write_text(model.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        (output_dir / "lineage.json").write_text(
+            canonical_json(result.lineage) + "\n", encoding="utf-8"
+        )
+        console.print(
+            canonical_json(
+                {
+                    "selected_model": result.selection.decision.selected_model,
+                    "hierarchy_id": result.hierarchy.hierarchy_id,
+                    "method": "bottom_up",
+                    "approval_status": "unapproved",
+                    "aggregate_intervals": "unsupported",
+                    "directory": str(output_dir),
+                }
+            ),
+            markup=False,
+            soft_wrap=True,
+        )
+    except (ContractViolation, ValueError, ImportError, OSError) as exc:
+        console.print(f"Demand reconciliation failed: {exc}", style="red", markup=False)
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("compare-demand")
 def compare_demand(
     frequency: str = typer.Option("MS", "--frequency", help="MS or W-MON"),

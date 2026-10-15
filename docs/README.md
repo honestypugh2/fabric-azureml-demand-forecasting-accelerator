@@ -42,6 +42,8 @@ future work.
 | Offline intervals, temporal calibration and uncertainty metrics | [modeling/uncertainty.md](modeling/uncertainty.md) |
 | Interval calibration scope and limitations | [ADR 0010](architecture/adr/0010-demand-temporal-interval-calibration.md) |
 | Bound interval artifacts, review policy and inference lineage | [ADR 0011](architecture/adr/0011-demand-interval-artifacts-and-review.md) |
+| Frozen hierarchies, bottom-up point forecasts and per-level metrics | [modeling/reconciliation.md](modeling/reconciliation.md) |
+| Reconciliation scope and aggregate uncertainty boundary | [ADR 0012](architecture/adr/0012-demand-bottom-up-reconciliation.md) |
 
 ### Inherited revenue documentation
 

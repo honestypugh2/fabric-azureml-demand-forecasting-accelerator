@@ -53,6 +53,12 @@ interval inference. `core/evaluation/demand_uncertainty.py` owns three-block
 calibration/evaluation and `core/data/demand_intervals.py` owns the additive
 interval contract. No namespace migration or dependency addition is made.
 
+Slice 7 adds `core/data/demand_hierarchy.py` for immutable known-at hierarchy
+versions, `core/models/demand_reconciliation.py` for point-only bottom-up sums,
+and `core/evaluation/demand_reconciliation.py` for complete aggregate scales,
+per-level evaluation and lineage. The `reconcile-demand` command runs offline;
+hierarchy outputs remain unapproved and aggregate intervals are unsupported.
+
 ## Migration boundaries
 
 - Revenue snapshot data/bundles are never silently accepted as demand inputs.
